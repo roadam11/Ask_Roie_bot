@@ -4,6 +4,7 @@ dist/
 .env.local
 .env.*.local
 *.log
+logs/
 npm-debug.log*
 coverage/
 .DS_Store

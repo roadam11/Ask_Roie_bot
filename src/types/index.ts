@@ -27,25 +27,14 @@ export enum MessageStatus {
 }
 
 /**
- * Follow-up status
+ * Follow-up status (matches database schema)
  */
-export enum FollowUpStatus {
-  SCHEDULED = 'scheduled',
-  SENT = 'sent',
-  CANCELLED = 'cancelled',
-  FAILED = 'failed'
-}
+export type FollowUpStatus = 'pending' | 'sent' | 'cancelled';
 
 /**
- * Follow-up type
+ * Follow-up type/timing (matches database schema)
  */
-export enum FollowUpType {
-  INITIAL_FOLLOWUP = 'initial_followup',
-  REMINDER = 'reminder',
-  RE_ENGAGEMENT = 're_engagement',
-  POST_BOOKING = 'post_booking',
-  FEEDBACK = 'feedback'
-}
+export type FollowUpType = '24h' | '72h' | '7d';
 
 /**
  * Analytics event types
@@ -267,44 +256,38 @@ export interface FollowUp {
   id: string;
 
   /** Reference to the lead */
-  leadId: string;
-
-  /** Type of follow-up */
-  type: FollowUpType;
+  lead_id: string;
 
   /** Scheduled send time */
-  scheduledAt: Date;
+  scheduled_for: Date;
+
+  /** Type of follow-up timing */
+  type: FollowUpType;
 
   /** Current status */
   status: FollowUpStatus;
 
-  /** Message content to send */
-  messageContent: string;
+  /** Message template identifier */
+  message_template?: string;
 
-  /** Actual send time */
-  sentAt: Date | null;
-
-  /** Number of retry attempts */
-  retryCount: number;
-
-  /** Error message if failed */
-  errorMessage: string | null;
+  /** Template name */
+  template_name?: string;
 
   /** Record creation timestamp */
-  createdAt: Date;
+  created_at: Date;
 
-  /** Record last update timestamp */
-  updatedAt: Date;
+  /** Actual send time */
+  sent_at?: Date;
 }
 
 /**
  * Data required to create a new follow-up
  */
 export interface CreateFollowUpInput {
-  leadId: string;
+  lead_id: string;
   type: FollowUpType;
-  scheduledAt: Date;
-  messageContent: string;
+  scheduled_for: Date;
+  template_name?: string;
 }
 
 // ============================================================================
@@ -359,7 +342,7 @@ export interface AnalyticsSummary {
   totalLeads: number;
 
   /** Leads by status */
-  leadsByStatus: Record<LeadStatus, number>;
+  leadsByStatus: Record<LeadStatusType, number>;
 
   /** Total messages sent */
   messagesSent: number;
@@ -1067,48 +1050,3 @@ export interface AppConfig {
   };
 }
 
-// ============================================================================
-// Export all types
-// ============================================================================
-
-export type {
-  Lead,
-  CreateLeadInput,
-  UpdateLeadInput,
-  Message,
-  CreateMessageInput,
-  FollowUp,
-  CreateFollowUpInput,
-  Analytics,
-  CreateAnalyticsInput,
-  AnalyticsSummary,
-  ClaudeToolCall,
-  ClaudeTool,
-  ClaudeMessage,
-  ClaudeContentBlock,
-  ClaudeTextBlock,
-  ClaudeToolUseBlock,
-  ClaudeToolResultBlock,
-  ClaudeResponse,
-  ClaudeRequestConfig,
-  WhatsAppWebhookPayload,
-  WhatsAppWebhookEntry,
-  WhatsAppWebhookChange,
-  WhatsAppWebhookValue,
-  WhatsAppMetadata,
-  WhatsAppContact,
-  WhatsAppIncomingMessage,
-  WhatsAppMediaObject,
-  WhatsAppStatusUpdate,
-  WhatsAppError,
-  WhatsAppOutgoingTextMessage,
-  WhatsAppOutgoingInteractiveMessage,
-  WhatsAppInteractiveAction,
-  WhatsAppSendMessageResponse,
-  CalendlyEvent,
-  CalendlyInvitee,
-  CalendlyWebhookPayload,
-  ApiResponse,
-  PaginatedResponse,
-  AppConfig
-};
