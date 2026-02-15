@@ -298,7 +298,6 @@ Create `railway.json`:
 - [ ] All environment variables configured
 - [ ] Database migrations run
 - [ ] WhatsApp webhook verified
-- [ ] Calendly webhook configured
 - [ ] SSL/HTTPS enabled
 - [ ] Logging configured
 - [ ] Error monitoring setup (Sentry recommended)
@@ -313,9 +312,18 @@ Create `railway.json`:
 | `GET` | `/health` | Health check |
 | `GET` | `/webhook/whatsapp` | WhatsApp webhook verification |
 | `POST` | `/webhook/whatsapp` | WhatsApp incoming messages |
-| `POST` | `/webhook/calendly` | Calendly booking events |
 | `GET` | `/admin/leads` | List all leads (protected) |
 | `GET` | `/admin/analytics` | Analytics dashboard (protected) |
+
+---
+
+## Background Workers
+
+| Worker | Schedule | Description |
+|--------|----------|-------------|
+| **Calendly Polling** | Every 5 minutes | Checks for new bookings via Calendly API (free tier compatible) |
+| **Follow-up Processor** | Every 1 minute | Sends scheduled follow-up messages (24h/72h/7d) |
+| **Window Checker** | Every 15 minutes | Identifies leads approaching 24h WhatsApp window expiry |
 
 ---
 

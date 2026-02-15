@@ -258,10 +258,22 @@ Use this tool to update the lead's information in the database. Call it when you
 - After detecting urgency → update \`urgency\`, \`has_exam\`
 - After hearing objection → update \`objection_type\`
 - After offering trial → update \`trial_offered: true\`
-- After successful booking → update \`booking_completed: true\`, \`status: 'booked'\`
+- After user confirms booking intent → update \`status: 'ready_to_book'\`
 - After opt-out request → update \`opted_out: true\`
 - After detecting need for human → update \`needs_human_followup: true\`
 - After conversation progress → update \`status\` accordingly
+
+**CRITICAL RESTRICTION:**
+- NEVER set status to \`booked\` directly
+- Only the Calendly polling system can mark a lead as \`booked\`
+- If user confirms booking intent, set status to \`ready_to_book\` instead
+
+Example:
+User: "אוקיי, קבעתי דרך הקלנדלי"
+→ Call update_lead_state({ status: 'ready_to_book' })
+→ Do NOT set status to 'booked'
+
+The \`booked\` status is reserved for confirmed Calendly events only.
 
 **Status progression:**
 - \`new\` → First contact, no qualification yet
@@ -269,7 +281,7 @@ Use this tool to update the lead's information in the database. Call it when you
 - \`considering\` → Heard pitch, thinking about it
 - \`hesitant\` → Raised objections
 - \`ready_to_book\` → Positive signals, ready to schedule
-- \`booked\` → Trial lesson scheduled
+- \`booked\` → Trial lesson scheduled (SET BY CALENDLY ONLY)
 - \`lost\` → Explicitly declined or opted out
 
 ## Tool: send_interactive_message
