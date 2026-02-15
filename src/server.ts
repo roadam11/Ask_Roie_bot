@@ -105,15 +105,14 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
 // API Routes
 // ============================================================================
 
-// TODO: Add routes in Phase 3.2
-// import whatsappRoutes from './api/routes/whatsapp.routes.js';
+import whatsappRoutes from './api/routes/whatsapp.routes.js';
 // import adminRoutes from './api/routes/admin.routes.js';
 // import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
-// app.use('/webhook/whatsapp', whatsappRoutes);
+app.use('/webhook/whatsapp', whatsappRoutes);
 
-// Admin routes (protected)
+// Admin routes (protected) - TODO: Add in Phase 3.3
 // app.use('/admin', adminAuth, adminRoutes);
 
 // Placeholder root route

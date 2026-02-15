@@ -24,9 +24,10 @@ import type { Lead } from '../types/index.js';
 
 /**
  * Message format for internal use
+ * Accepts both internal format ('bot', 'system') and Claude API format ('assistant')
  */
 interface ConversationMessage {
-  role: 'user' | 'bot' | 'system';
+  role: 'user' | 'assistant' | 'bot' | 'system';
   content: string;
   timestamp?: Date;
 }

@@ -343,9 +343,10 @@ Remember: Your goal is to help the student succeed by connecting them with Roie.
 
 /**
  * Message in conversation history
+ * Accepts both internal format ('bot', 'system') and Claude API format ('assistant')
  */
 interface ConversationMessage {
-  role: 'user' | 'bot' | 'system';
+  role: 'user' | 'assistant' | 'bot' | 'system';
   content: string;
   timestamp?: Date;
 }
