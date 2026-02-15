@@ -17,7 +17,9 @@
     "db:migrate": "tsx scripts/setup-db.ts",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "worker:followup": "tsx src/workers/followup.worker.ts",
+    "worker:scheduler": "tsx src/workers/scheduler.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
