@@ -39,19 +39,19 @@ const envSchema = z.object({
     .string()
     .min(1, 'REDIS_URL is required'),
 
-  // WhatsApp Cloud API
+  // WhatsApp Cloud API (optional for initial deployment)
   WHATSAPP_PHONE_NUMBER_ID: z
     .string()
-    .min(1, 'WHATSAPP_PHONE_NUMBER_ID is required'),
+    .default(''),
   WHATSAPP_BUSINESS_ACCOUNT_ID: z
     .string()
-    .min(1, 'WHATSAPP_BUSINESS_ACCOUNT_ID is required'),
+    .default(''),
   WHATSAPP_ACCESS_TOKEN: z
     .string()
-    .min(1, 'WHATSAPP_ACCESS_TOKEN is required'),
+    .default(''),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z
     .string()
-    .min(1, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN is required'),
+    .default(''),
 
   // Claude API
   ANTHROPIC_API_KEY: z
@@ -59,16 +59,16 @@ const envSchema = z.object({
     .min(1, 'ANTHROPIC_API_KEY is required')
     .startsWith('sk-ant-', 'ANTHROPIC_API_KEY must start with sk-ant-'),
 
-  // Calendly
+  // Calendly (optional for initial deployment)
   CALENDLY_ACCESS_TOKEN: z
     .string()
-    .min(1, 'CALENDLY_ACCESS_TOKEN is required'),
+    .default(''),
   CALENDLY_ORGANIZATION_URI: z
     .string()
-    .url('CALENDLY_ORGANIZATION_URI must be a valid URL'),
+    .default(''),
   CALENDLY_EVENT_TYPE_URI: z
     .string()
-    .url('CALENDLY_EVENT_TYPE_URI must be a valid URL'),
+    .default(''),
 
   // Admin
   ADMIN_USERNAME: z
