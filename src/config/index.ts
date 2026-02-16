@@ -251,9 +251,9 @@ const config: Config = {
     apiBaseUrl: 'https://graph.facebook.com/v18.0',
   },
 
-  anthropic: {
+anthropic: {
     apiKey: env.ANTHROPIC_API_KEY,
-    model: 'claude-3-sonnet-20240229',
+    model: 'claude-3-5-sonnet-20241022',
     maxTokens: 1024,
   },
 
