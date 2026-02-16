@@ -156,9 +156,13 @@ async function startServer(): Promise<void> {
     logger.info('Database connected');
 
     // Start HTTP server
-    server = app.listen(config.server.port, () => {
+    const PORT = config.server.port;
+    const HOST = '0.0.0.0'; // Critical for Railway/Docker!
+
+    server = app.listen(PORT, HOST, () => {
       logger.info('Server started', {
-        port: config.server.port,
+        port: PORT,
+        host: HOST,
         env: config.server.nodeEnv,
         nodeVersion: process.version,
       });
@@ -167,7 +171,7 @@ async function startServer(): Promise<void> {
     // Handle server errors
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
-        logger.error(`Port ${config.server.port} is already in use`);
+        logger.error(`Port ${PORT} is already in use`);
         process.exit(1);
       }
       throw error;
