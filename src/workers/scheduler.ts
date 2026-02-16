@@ -1,10 +1,9 @@
 /**
- * Follow-Up Scheduler
+ * Background Job Scheduler
  *
- * Cron-based scheduler that finds due follow-ups and adds them
- * to the BullMQ queue for processing.
- *
- * Runs every 5 minutes to check for follow-ups that need to be sent.
+ * Cron-based scheduler that manages periodic tasks:
+ * - Follow-up scheduling (every 5 minutes)
+ * - Calendly polling (every 5 minutes)
  *
  * @usage
  * npm run worker:scheduler
@@ -14,7 +13,7 @@
 
 import schedule from 'node-schedule';
 import * as FollowUpModel from '../models/followup.model.js';
-import { scheduleFollowUp, setupQueueListeners, closeAllQueues } from './queue.js';
+import { scheduleFollowUp, scheduleCalendlyPoll, setupQueueListeners, closeAllQueues } from './queue.js';
 import logger from '../utils/logger.js';
 
 // ============================================================================
@@ -32,8 +31,13 @@ const SCHEDULE_CRON = '*/5 * * * *';
  */
 const MAX_FOLLOWUPS_PER_RUN = 50;
 
+/**
+ * Calendly polling schedule (also every 5 minutes, offset by 2 minutes)
+ */
+const CALENDLY_CRON = '2-57/5 * * * *';
+
 // ============================================================================
-// Scheduler Logic
+// Follow-Up Scheduler Logic
 // ============================================================================
 
 /**
@@ -111,54 +115,108 @@ async function scheduleDueFollowUps(): Promise<void> {
 }
 
 /**
- * Run scheduler immediately (for testing or manual trigger)
+ * Run follow-up scheduler immediately (for testing or manual trigger)
  */
-export async function runSchedulerNow(): Promise<void> {
+async function runFollowUpSchedulerNow(): Promise<void> {
   await scheduleDueFollowUps();
+}
+
+// ============================================================================
+// Calendly Polling Logic
+// ============================================================================
+
+/**
+ * Schedule a Calendly poll job
+ */
+async function scheduleCalendlyPollJob(): Promise<void> {
+  const startTime = Date.now();
+
+  try {
+    logger.info('Scheduling Calendly poll job...');
+
+    await scheduleCalendlyPoll();
+
+    const duration = Date.now() - startTime;
+
+    logger.info('Calendly poll job scheduled', {
+      duration: `${duration}ms`,
+    });
+  } catch (error) {
+    logger.error('Error scheduling Calendly poll', {
+      error: (error as Error).message,
+      stack: (error as Error).stack,
+    });
+  }
+}
+
+/**
+ * Run Calendly poll immediately (for testing or manual trigger)
+ */
+async function runCalendlyPollNow(): Promise<void> {
+  await scheduleCalendlyPollJob();
 }
 
 // ============================================================================
 // Scheduler Setup
 // ============================================================================
 
-let schedulerJob: schedule.Job | null = null;
+let followUpSchedulerJob: schedule.Job | null = null;
+let calendlySchedulerJob: schedule.Job | null = null;
 
 /**
- * Start the scheduler
+ * Start all schedulers
  */
 function startScheduler(): void {
-  logger.info('Starting follow-up scheduler...', {
-    schedule: SCHEDULE_CRON,
-    maxPerRun: MAX_FOLLOWUPS_PER_RUN,
+  logger.info('Starting background job schedulers...', {
+    followUpSchedule: SCHEDULE_CRON,
+    calendlySchedule: CALENDLY_CRON,
+    maxFollowUpsPerRun: MAX_FOLLOWUPS_PER_RUN,
   });
 
   // Setup queue event listeners
   setupQueueListeners();
 
-  // Schedule the job
-  schedulerJob = schedule.scheduleJob(SCHEDULE_CRON, async () => {
-    logger.debug('Scheduler triggered by cron');
+  // Schedule follow-up jobs
+  followUpSchedulerJob = schedule.scheduleJob(SCHEDULE_CRON, async () => {
+    logger.debug('Follow-up scheduler triggered by cron');
     await scheduleDueFollowUps();
   });
 
-  // Also run immediately on startup
-  scheduleDueFollowUps().catch((error) => {
-    logger.error('Initial scheduler run failed', { error });
+  // Schedule Calendly polling jobs
+  calendlySchedulerJob = schedule.scheduleJob(CALENDLY_CRON, async () => {
+    logger.debug('Calendly scheduler triggered by cron');
+    await scheduleCalendlyPollJob();
   });
 
-  logger.info('Follow-up scheduler started', {
-    nextRun: schedulerJob.nextInvocation()?.toISOString(),
+  // Run both immediately on startup
+  scheduleDueFollowUps().catch((error) => {
+    logger.error('Initial follow-up scheduler run failed', { error });
+  });
+
+  scheduleCalendlyPollJob().catch((error) => {
+    logger.error('Initial Calendly poll failed', { error });
+  });
+
+  logger.info('All schedulers started', {
+    followUpNextRun: followUpSchedulerJob.nextInvocation()?.toISOString(),
+    calendlyNextRun: calendlySchedulerJob.nextInvocation()?.toISOString(),
   });
 }
 
 /**
- * Stop the scheduler
+ * Stop all schedulers
  */
 function stopScheduler(): void {
-  if (schedulerJob) {
-    schedulerJob.cancel();
-    schedulerJob = null;
+  if (followUpSchedulerJob) {
+    followUpSchedulerJob.cancel();
+    followUpSchedulerJob = null;
     logger.info('Follow-up scheduler stopped');
+  }
+
+  if (calendlySchedulerJob) {
+    calendlySchedulerJob.cancel();
+    calendlySchedulerJob = null;
+    logger.info('Calendly scheduler stopped');
   }
 }
 
@@ -201,6 +259,10 @@ export {
   startScheduler,
   stopScheduler,
   scheduleDueFollowUps,
+  scheduleCalendlyPollJob,
+  runFollowUpSchedulerNow,
+  runCalendlyPollNow,
   SCHEDULE_CRON,
+  CALENDLY_CRON,
   MAX_FOLLOWUPS_PER_RUN,
 };

@@ -19,6 +19,7 @@
     "format": "prettier --write src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "worker:followup": "tsx src/workers/followup.worker.ts",
+    "worker:calendly": "tsx src/workers/calendly.worker.ts",
     "worker:scheduler": "tsx src/workers/scheduler.ts"
   },
   "dependencies": {
