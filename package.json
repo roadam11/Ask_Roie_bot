@@ -1,7 +1,7 @@
 {
   "name": "ask-roie-bot",
   "version": "1.0.0",
-  "description": "WhatsApp AI Sales Agent for Ask ROIE tutoring service",
+  "description": "WhatsApp & Telegram AI Sales Agent for Ask ROIE tutoring service",
   "main": "dist/server.js",
   "type": "module",
   "engines": {

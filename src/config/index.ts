@@ -70,6 +70,11 @@ const envSchema = z.object({
     .string()
     .default(''),
 
+  // Telegram Bot (optional - alternative to WhatsApp)
+  TELEGRAM_BOT_TOKEN: z
+    .string()
+    .default(''),
+
   // Admin
   ADMIN_USERNAME: z
     .string()
@@ -188,6 +193,16 @@ interface CalendlyConfig {
 }
 
 /**
+ * Telegram Bot configuration
+ */
+interface TelegramConfig {
+  /** Bot token from @BotFather */
+  botToken: string;
+  /** Whether Telegram is enabled */
+  enabled: boolean;
+}
+
+/**
  * Admin dashboard configuration
  */
 interface AdminConfig {
@@ -213,6 +228,7 @@ interface Config {
   database: DatabaseConfig;
   redis: RedisConfig;
   whatsapp: WhatsAppConfig;
+  telegram: TelegramConfig;
   anthropic: AnthropicConfig;
   calendly: CalendlyConfig;
   admin: AdminConfig;
@@ -251,7 +267,12 @@ const config: Config = {
     apiBaseUrl: 'https://graph.facebook.com/v18.0',
   },
 
-anthropic: {
+  telegram: {
+    botToken: env.TELEGRAM_BOT_TOKEN,
+    enabled: !!env.TELEGRAM_BOT_TOKEN,
+  },
+
+  anthropic: {
     apiKey: env.ANTHROPIC_API_KEY,
     model: 'claude-3-5-sonnet-20241022',
     maxTokens: 1024,
@@ -286,6 +307,7 @@ export type {
   DatabaseConfig,
   RedisConfig,
   WhatsAppConfig,
+  TelegramConfig,
   AnthropicConfig,
   CalendlyConfig,
   AdminConfig,

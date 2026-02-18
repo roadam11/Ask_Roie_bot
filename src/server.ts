@@ -106,11 +106,15 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
 // ============================================================================
 
 import whatsappRoutes from './api/routes/whatsapp.routes.js';
+import telegramRoutes from './api/routes/telegram.routes.js';
 import adminRoutes from './api/routes/admin.routes.js';
 import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
 app.use('/webhook/whatsapp', whatsappRoutes);
+
+// Telegram webhook routes
+app.use('/webhook/telegram', telegramRoutes);
 
 // Admin routes (protected with Basic Auth)
 app.use('/admin', adminAuth, adminRoutes);
@@ -120,10 +124,13 @@ app.get('/', (_req: Request, res: Response) => {
   res.json({
     name: 'Ask ROIE Bot',
     version: '1.0.0',
-    description: 'WhatsApp AI Sales Agent',
+    description: 'WhatsApp & Telegram AI Sales Agent',
     endpoints: {
       health: '/health',
-      webhook: '/webhook/whatsapp',
+      webhooks: {
+        whatsapp: '/webhook/whatsapp',
+        telegram: '/webhook/telegram',
+      },
       admin: '/admin',
     },
   });
