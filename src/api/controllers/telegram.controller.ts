@@ -6,9 +6,10 @@
  *
  * Key differences from WhatsApp:
  * - No 24-hour window restrictions
- * - Uses chat_id instead of phone number
+ * - Uses chat_id (prefixed with 'tg_') instead of phone number
  * - No webhook verification needed (just set the URL)
  * - Simpler message format
+ * - Free, no Meta verification required
  */
 
 import { Request, Response } from 'express';
