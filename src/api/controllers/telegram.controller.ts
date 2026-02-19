@@ -122,10 +122,10 @@ async function processMessage(parsed: {
     const contactName = TelegramService.buildFullName(parsed.firstName, parsed.lastName);
 
     // Get or create lead using chat_id as identifier (prefixed with 'tg_')
+    // Note: Telegram leads use 'tg_' prefix to distinguish from WhatsApp phone numbers
     const telegramIdentifier = `tg_${chatId}`;
     const { lead, created } = await LeadService.findOrCreateLead(telegramIdentifier, {
       name: contactName || undefined,
-      source: 'telegram',
     });
 
     if (created) {
