@@ -250,18 +250,27 @@ async function processMessage(
       }
     }
 
+    // Get response content - use fallback if Claude returned only tool calls
+    let responseContent = claudeResponse.content;
+    if (!responseContent || responseContent.trim().length === 0) {
+      // Claude returned only tool_use with no text - this shouldn't happen but handle gracefully
+      logger.warn('Claude returned no text content, using fallback', {
+        leadId: lead.id,
+        toolCalls: claudeResponse.toolCalls.length,
+      });
+      responseContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
+    }
+
     // Save bot message
     await MessageService.createBotMessage(
       lead.id,
-      claudeResponse.content,
+      responseContent,
       claudeResponse.usage.totalTokens,
       claudeResponse.model
     );
 
     // Send response via WhatsApp
-    if (claudeResponse.content) {
-      await WhatsAppService.sendTextMessage(phone, claudeResponse.content);
-    }
+    await WhatsAppService.sendTextMessage(phone, responseContent);
 
     // Send interactive message if requested
     if (interactiveMessage) {
