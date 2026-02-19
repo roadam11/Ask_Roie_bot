@@ -15,6 +15,7 @@ import { normalizePhoneSafe } from '../../utils/phone-normalizer.js';
 import * as LeadService from '../../services/lead.service.js';
 import * as MessageService from '../../services/message.service.js';
 import * as ClaudeService from '../../services/claude.service.js';
+import type { ToolExecutor } from '../../services/claude.service.js';
 import * as WhatsAppService from '../../services/whatsapp.service.js';
 import type { Lead, UpdateLeadInput } from '../../types/index.js';
 
@@ -232,45 +233,39 @@ async function processMessage(
     // Get conversation history for Claude
     const conversationHistory = await MessageService.getConversationForClaude(lead.id, 20);
 
-    // Call Claude API (system prompt is built internally with lead context)
-    const claudeResponse = await ClaudeService.sendMessage(
-      lead,
-      conversationHistory
-    );
-
-    // Process tool calls (update lead state, send interactive messages)
+    // Track lead state changes and interactive messages
     let updatedLead = lead;
     let interactiveMessage: WhatsAppService.WhatsAppInteractive | null = null;
 
-    for (const toolCall of claudeResponse.toolCalls) {
+    // Create tool executor function
+    const toolExecutor: ToolExecutor = async (toolCall) => {
       if (toolCall.name === 'update_lead_state') {
         updatedLead = await processUpdateLeadState(lead.id, toolCall.input);
+        return { result: JSON.stringify({ success: true, leadId: lead.id }) };
       } else if (toolCall.name === 'send_interactive_message') {
         interactiveMessage = processInteractiveMessage(toolCall.input);
+        return { result: JSON.stringify({ success: true, messageQueued: !!interactiveMessage }) };
       }
-    }
+      return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
+    };
 
-    // Get response content - use fallback if Claude returned only tool calls
-    let responseContent = claudeResponse.content;
-    if (!responseContent || responseContent.trim().length === 0) {
-      // Claude returned only tool_use with no text - this shouldn't happen but handle gracefully
-      logger.warn('Claude returned no text content, using fallback', {
-        leadId: lead.id,
-        toolCalls: claudeResponse.toolCalls.length,
-      });
-      responseContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
-    }
+    // Call Claude API with agentic loop (automatic tool execution)
+    const agentResult = await ClaudeService.sendMessageWithToolLoop(
+      lead,
+      conversationHistory,
+      toolExecutor
+    );
 
     // Save bot message
     await MessageService.createBotMessage(
       lead.id,
-      responseContent,
-      claudeResponse.usage.totalTokens,
-      claudeResponse.model
+      agentResult.content,
+      agentResult.totalUsage.totalTokens,
+      agentResult.model
     );
 
     // Send response via WhatsApp
-    await WhatsAppService.sendTextMessage(phone, responseContent);
+    await WhatsAppService.sendTextMessage(phone, agentResult.content);
 
     // Send interactive message if requested
     if (interactiveMessage) {
@@ -281,8 +276,9 @@ async function processMessage(
     logger.info('Message processed successfully', {
       leadId: lead.id,
       duration,
-      tokens: claudeResponse.usage.totalTokens,
-      toolCalls: claudeResponse.toolCalls.length,
+      tokens: agentResult.totalUsage.totalTokens,
+      toolCalls: agentResult.executedToolCalls.length,
+      apiCalls: agentResult.apiCallCount,
       statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
     });
 

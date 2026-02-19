@@ -17,6 +17,7 @@ import logger from '../../utils/logger.js';
 import * as LeadService from '../../services/lead.service.js';
 import * as MessageService from '../../services/message.service.js';
 import * as ClaudeService from '../../services/claude.service.js';
+import type { ToolExecutor } from '../../services/claude.service.js';
 import * as TelegramService from '../../services/telegram.service.js';
 import type { TelegramUpdate } from '../../services/telegram.service.js';
 import type { Lead, UpdateLeadInput } from '../../types/index.js';
@@ -158,51 +159,48 @@ async function processMessage(parsed: {
     // Send another typing indicator (Claude can take a few seconds)
     await TelegramService.sendTypingAction(chatId);
 
-    // Call Claude API
-    const claudeResponse = await ClaudeService.sendMessage(
-      lead,
-      conversationHistory
-    );
-
-    // Process tool calls (update lead state)
+    // Track lead state changes for logging
     let updatedLead = lead;
 
-    for (const toolCall of claudeResponse.toolCalls) {
+    // Create tool executor function
+    const toolExecutor: ToolExecutor = async (toolCall) => {
       if (toolCall.name === 'update_lead_state') {
         updatedLead = await processUpdateLeadState(lead.id, toolCall.input);
+        return { result: JSON.stringify({ success: true, leadId: lead.id }) };
+      } else if (toolCall.name === 'send_interactive_message') {
+        // Telegram doesn't support WhatsApp interactive messages - acknowledge but skip
+        logger.debug('Skipping interactive message for Telegram', { toolCall: toolCall.name });
+        return { result: JSON.stringify({ success: true, note: 'Interactive messages not supported on Telegram' }) };
       }
-      // Note: Interactive messages for Telegram would need different handling
-    }
+      return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
+    };
 
-    // Get response content - use fallback if Claude returned only tool calls
-    let responseContent = claudeResponse.content;
-    if (!responseContent || responseContent.trim().length === 0) {
-      // Claude returned only tool_use with no text - this shouldn't happen but handle gracefully
-      logger.warn('Claude returned no text content, using fallback', {
-        leadId: lead.id,
-        toolCalls: claudeResponse.toolCalls.length,
-      });
-      responseContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
-    }
+    // Call Claude API with agentic loop (automatic tool execution)
+    const agentResult = await ClaudeService.sendMessageWithToolLoop(
+      lead,
+      conversationHistory,
+      toolExecutor
+    );
 
     // Save bot message
     await MessageService.createBotMessage(
       lead.id,
-      responseContent,
-      claudeResponse.usage.totalTokens,
-      claudeResponse.model
+      agentResult.content,
+      agentResult.totalUsage.totalTokens,
+      agentResult.model
     );
 
     // Send response via Telegram
-    await TelegramService.sendMessage(chatId, responseContent);
+    await TelegramService.sendMessage(chatId, agentResult.content);
 
     const duration = Date.now() - startTime;
     logger.info('Telegram message processed successfully', {
       leadId: lead.id,
       chatId: maskChatId(chatId),
       duration,
-      tokens: claudeResponse.usage.totalTokens,
-      toolCalls: claudeResponse.toolCalls.length,
+      tokens: agentResult.totalUsage.totalTokens,
+      toolCalls: agentResult.executedToolCalls.length,
+      apiCalls: agentResult.apiCallCount,
       statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
     });
 

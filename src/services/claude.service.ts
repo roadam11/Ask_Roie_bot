@@ -580,6 +580,254 @@ export async function continueAfterToolUse(
 }
 
 // ============================================================================
+// Agentic Loop - Multi-Turn Tool Execution
+// ============================================================================
+
+/**
+ * Tool executor function type
+ */
+export type ToolExecutor = (
+  toolCall: ToolCall
+) => Promise<{ result: string; isError?: boolean }>;
+
+/**
+ * Result from the agentic loop
+ */
+export interface AgentLoopResult {
+  /** Final text response for the user */
+  content: string;
+
+  /** All tool calls that were executed */
+  executedToolCalls: ToolCall[];
+
+  /** Total token usage across all API calls */
+  totalUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+
+  /** Total cost across all API calls */
+  totalCostUsd: number;
+
+  /** Model used */
+  model: string;
+
+  /** Number of API calls made */
+  apiCallCount: number;
+}
+
+/**
+ * Maximum number of tool execution loops to prevent infinite loops
+ */
+const MAX_TOOL_LOOPS = 5;
+
+/**
+ * Send a message with automatic tool execution loop
+ *
+ * This function implements a proper agentic loop:
+ * 1. Send message to Claude
+ * 2. If Claude returns tool_use, execute the tools
+ * 3. Send tool results back to Claude
+ * 4. Repeat until Claude returns a final text response (end_turn)
+ *
+ * @param lead - Current lead state
+ * @param conversationHistory - Previous messages
+ * @param executeTools - Function to execute tool calls
+ * @returns Final response with text content guaranteed
+ */
+export async function sendMessageWithToolLoop(
+  lead: Lead,
+  conversationHistory: ConversationMessage[],
+  executeTools: ToolExecutor
+): Promise<AgentLoopResult> {
+  const anthropic = getClient();
+  const systemPrompt = buildPromptWithContext(conversationHistory, lead);
+  let messages = formatMessagesForClaude(conversationHistory);
+
+  if (messages.length === 0) {
+    throw new Error('No messages to send to Claude');
+  }
+
+  const executedToolCalls: ToolCall[] = [];
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCostUsd = 0;
+  let model = config.anthropic.model;
+  let apiCallCount = 0;
+  let finalContent = '';
+
+  for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
+    apiCallCount++;
+
+    logger.debug('Agent loop iteration', {
+      leadId: lead.id,
+      loop: loop + 1,
+      messageCount: messages.length,
+    });
+
+    // Make API call
+    const response = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: config.anthropic.maxTokens,
+      system: systemPrompt,
+      messages,
+      tools: TOOLS,
+    });
+
+    const parsed = parseResponse(response);
+    model = parsed.model;
+
+    // Accumulate usage
+    totalInputTokens += parsed.usage.inputTokens;
+    totalOutputTokens += parsed.usage.outputTokens;
+    totalCostUsd += parsed.costUsd;
+
+    // Log this API call
+    logClaude('agent_loop_call', {
+      input: parsed.usage.inputTokens,
+      output: parsed.usage.outputTokens,
+    }, {
+      leadId: lead.id,
+      loop: loop + 1,
+      hasToolUse: parsed.hasToolUse,
+      toolNames: parsed.toolCalls.map((t) => t.name),
+      contentLength: parsed.content.length,
+    });
+
+    // Accumulate any text content
+    if (parsed.content) {
+      finalContent += (finalContent ? '\n\n' : '') + parsed.content;
+    }
+
+    // If no tool use, we're done
+    if (!parsed.hasToolUse || parsed.stopReason !== 'tool_use') {
+      logger.info('Agent loop completed', {
+        leadId: lead.id,
+        loops: loop + 1,
+        totalToolCalls: executedToolCalls.length,
+        finalContentLength: finalContent.length,
+        totalTokens: totalInputTokens + totalOutputTokens,
+        totalCostUsd: totalCostUsd.toFixed(4),
+      });
+
+      return {
+        content: finalContent,
+        executedToolCalls,
+        totalUsage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          totalTokens: totalInputTokens + totalOutputTokens,
+        },
+        totalCostUsd,
+        model,
+        apiCallCount,
+      };
+    }
+
+    // Execute tools and collect results
+    const toolResults: Array<{
+      toolCallId: string;
+      result: string;
+      isError?: boolean;
+    }> = [];
+
+    for (const toolCall of parsed.toolCalls) {
+      executedToolCalls.push(toolCall);
+
+      try {
+        const result = await executeTools(toolCall);
+        toolResults.push({
+          toolCallId: toolCall.id,
+          result: result.result,
+          isError: result.isError,
+        });
+
+        logger.debug('Tool executed in agent loop', {
+          leadId: lead.id,
+          tool: toolCall.name,
+          isError: result.isError,
+        });
+      } catch (error) {
+        toolResults.push({
+          toolCallId: toolCall.id,
+          result: `Error executing tool: ${(error as Error).message}`,
+          isError: true,
+        });
+
+        logger.error('Tool execution error in agent loop', {
+          leadId: lead.id,
+          tool: toolCall.name,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    // Build the assistant message with tool_use blocks
+    const assistantContent: Anthropic.ContentBlock[] = [];
+
+    // Add any text content from this response
+    if (parsed.content) {
+      assistantContent.push({ type: 'text', text: parsed.content });
+    }
+
+    // Add tool_use blocks
+    for (const toolCall of parsed.toolCalls) {
+      assistantContent.push({
+        type: 'tool_use',
+        id: toolCall.id,
+        name: toolCall.name,
+        input: toolCall.input,
+      });
+    }
+
+    // Append assistant message with tool calls
+    messages.push({
+      role: 'assistant',
+      content: assistantContent,
+    });
+
+    // Append tool results as user message
+    const toolResultContent: Anthropic.ToolResultBlockParam[] = toolResults.map((tr) => ({
+      type: 'tool_result' as const,
+      tool_use_id: tr.toolCallId,
+      content: tr.result,
+      is_error: tr.isError,
+    }));
+
+    messages.push({
+      role: 'user',
+      content: toolResultContent,
+    });
+  }
+
+  // If we hit max loops, log warning and return what we have
+  logger.warn('Agent loop hit max iterations', {
+    leadId: lead.id,
+    maxLoops: MAX_TOOL_LOOPS,
+    executedToolCalls: executedToolCalls.length,
+  });
+
+  // If we still have no content, generate a fallback
+  if (!finalContent) {
+    finalContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
+  }
+
+  return {
+    content: finalContent,
+    executedToolCalls,
+    totalUsage: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens,
+    },
+    totalCostUsd,
+    model,
+    apiCallCount,
+  };
+}
+
+// ============================================================================
 // Tool Validation
 // ============================================================================
 
