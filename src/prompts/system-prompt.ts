@@ -290,7 +290,11 @@ https://calendly.com/roadam11/meet-with-me
 תוכל לבחור מתי נוח לך 🙂"
 (Give them an easy path back)
 
-Then set a 24h follow-up using \`update_lead_state\`.
+**CRITICAL - ALWAYS call update_lead_state with \`lead_state: 'thinking'\` when user hesitates!**
+This triggers a 24h follow-up reminder. Example:
+\`\`\`json
+{ "lead_state": "thinking", "status": "considering" }
+\`\`\`
 
 ## Frontal 1 Hour Request
 Lead: "אפשר פרונטלי לשעה?"

@@ -193,6 +193,14 @@ export function decideFollowUp(lead: Lead): FollowUpDecision {
     const thinkingTime = new Date(lead.updated_at);
     const scheduledAt = calculateFollowUpTime('thinking_24h', thinkingTime);
 
+    logger.info('Thinking follow-up check', {
+      leadId: lead.id,
+      thinkingTime: thinkingTime.toISOString(),
+      scheduledAt: scheduledAt.toISOString(),
+      now: now.toISOString(),
+      willSchedule: scheduledAt.getTime() > now.getTime(),
+    });
+
     // Only schedule if not already past the send time
     if (scheduledAt.getTime() > now.getTime()) {
       return {
@@ -375,6 +383,8 @@ export async function onLeadStateChange(
     trialCompletedAt?: Date;
   }
 ): Promise<ScheduleResult | null> {
+  logger.info('onLeadStateChange called', { leadId, newState, additionalData });
+
   try {
     // Get updated lead
     const lead = await queryOne<Lead>(
@@ -386,6 +396,13 @@ export async function onLeadStateChange(
       logger.warn('Lead not found for state change', { leadId, newState });
       return null;
     }
+
+    logger.info('Lead fetched for follow-up decision', {
+      leadId,
+      lead_state: lead.lead_state,
+      follow_up_count: lead.follow_up_count,
+      opted_out: lead.opted_out,
+    });
 
     // Update trial timestamps if provided
     if (additionalData?.trialScheduledAt) {

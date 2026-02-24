@@ -247,7 +247,7 @@ async function processMessage(
     // Create tool executor function
     const toolExecutor: ToolExecutor = async (toolCall) => {
       if (toolCall.name === 'update_lead_state') {
-        updatedLead = await processUpdateLeadState(lead.id, toolCall.input);
+        updatedLead = await processUpdateLeadState(lead.id, toolCall.input, messageText);
         return { result: JSON.stringify({ success: true, leadId: lead.id }) };
       } else if (toolCall.name === 'send_interactive_message') {
         interactiveMessage = processInteractiveMessage(toolCall.input);
@@ -320,8 +320,11 @@ async function processMessage(
  */
 async function processUpdateLeadState(
   leadId: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  lastUserMessage: string
 ): Promise<Lead> {
+  logger.info('update_lead_state called', { leadId, input });
+
   // Validate input
   const validation = ClaudeService.validateUpdateLeadStateInput(input);
 
@@ -383,11 +386,32 @@ async function processUpdateLeadState(
   if (input.lead_state && typeof input.lead_state === 'string') {
     newLeadState = input.lead_state as LeadState;
     updateData.lead_state = newLeadState;
+    logger.info('lead_state explicitly set', { leadId, newLeadState });
   }
 
   // Auto-map status → lead_state ONLY if lead_state wasn't explicitly set
   if (!updateData.lead_state) {
     if (input.status === 'considering' || input.status === 'hesitant') {
+      newLeadState = 'thinking';
+      updateData.lead_state = 'thinking';
+      logger.info('lead_state auto-mapped from status', { leadId, status: input.status, newLeadState });
+    }
+  }
+
+  // Safety net: Detect "thinking" phrases in user message
+  // If user said thinking phrase but lead_state not set -> force it
+  if (!updateData.lead_state && lastUserMessage) {
+    const thinkingPhrases = ['אחשוב', 'אעדכן', 'צריך זמן', 'צריך לחשוב', 'אחזור אליך'];
+    const userSaidThinking = thinkingPhrases.some(phrase =>
+      lastUserMessage.includes(phrase)
+    );
+
+    if (userSaidThinking) {
+      logger.warn('Safety net: User said thinking phrase but Claude did not set lead_state - forcing it', {
+        leadId,
+        userMessage: lastUserMessage.substring(0, 100),
+        toolInput: input,
+      });
       newLeadState = 'thinking';
       updateData.lead_state = 'thinking';
     }
@@ -408,9 +432,10 @@ async function processUpdateLeadState(
 
   // Trigger follow-up automation if lead_state changed
   if (newLeadState) {
+    logger.info('Triggering follow-up automation', { leadId, newLeadState });
     try {
-      await onLeadStateChange(leadId, newLeadState);
-      logger.debug('Follow-up automation triggered', { leadId, newLeadState });
+      const result = await onLeadStateChange(leadId, newLeadState);
+      logger.info('Follow-up automation result', { leadId, newLeadState, result });
     } catch (error) {
       // Don't fail the update if follow-up scheduling fails
       logger.error('Failed to trigger follow-up automation', {
@@ -419,6 +444,8 @@ async function processUpdateLeadState(
         error: (error as Error).message,
       });
     }
+  } else {
+    logger.debug('No lead_state change, skipping follow-up automation', { leadId, updateData });
   }
 
   // Try to auto-qualify if conditions are met

@@ -123,7 +123,9 @@ const UPDATE_LEAD_STATE_TOOL: Anthropic.Tool = {
 CRITICAL: NEVER set status to 'booked' directly. Only set 'ready_to_book' when the user confirms booking intent. The 'booked' status is reserved for confirmed Calendly events only.
 
 Status progression: new → qualified → considering → hesitant → ready_to_book → booked (Calendly only)
-'lost' can be set from any status.`,
+'lost' can be set from any status.
+
+FOLLOW-UP AUTOMATION: When user says "אחשוב על זה" / "אני צריך לחשוב" / "אעדכן", set lead_state to 'thinking' to trigger a 24h follow-up reminder.`,
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -154,6 +156,11 @@ Status progression: new → qualified → considering → hesitant → ready_to_
         type: 'string',
         enum: ['new', 'qualified', 'considering', 'hesitant', 'ready_to_book', 'lost'],
         description: 'Lead status in sales funnel (cannot set to booked)',
+      },
+      lead_state: {
+        type: 'string',
+        enum: ['new', 'engaged', 'thinking', 'trial_scheduled', 'converted', 'closed'],
+        description: 'Lead state for follow-up automation. Set to "thinking" when user says they need to think about it.',
       },
       parent_or_student: {
         type: 'string',
