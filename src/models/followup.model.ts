@@ -520,9 +520,15 @@ export async function getStats(): Promise<{
   const typeResult = await query<{ type: FollowUpType; count: number }>(typeSql, []);
 
   const byType: Record<FollowUpType, number> = {
+    // Legacy types
     '24h': 0,
     '72h': 0,
     '7d': 0,
+    // Automation types
+    'thinking_24h': 0,
+    'trial_reminder_2h': 0,
+    'trial_followup_24h': 0,
+    'idle_48h': 0,
   };
   for (const row of typeResult.rows) {
     byType[row.type] = row.count;

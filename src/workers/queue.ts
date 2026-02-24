@@ -328,6 +328,147 @@ export async function trackEventAsync(
 }
 
 // ============================================================================
+// Automation Follow-up Helpers
+// CRITICAL: UTC math only - prevents 2AM messages
+// ============================================================================
+
+import type { AutomationFollowUpType } from '../types/index.js';
+
+/**
+ * Deterministic job ID patterns for each follow-up type
+ * Using deterministic IDs prevents duplicate jobs when rescheduling
+ *
+ * Pattern: followup-${leadId}-${type_suffix}
+ */
+const JOB_ID_PATTERNS: Record<AutomationFollowUpType, (leadId: string) => string> = {
+  'thinking_24h': (leadId) => `followup-${leadId}-thinking_24h`,
+  'trial_reminder_2h': (leadId) => `followup-${leadId}-trial_reminder`,
+  'trial_followup_24h': (leadId) => `followup-${leadId}-trial_followup`,
+  'idle_48h': (leadId) => `followup-${leadId}-idle_48h`,
+};
+
+/**
+ * Get the deterministic job ID for a follow-up type and lead
+ */
+export function getAutomationJobId(type: AutomationFollowUpType, leadId: string): string {
+  return JOB_ID_PATTERNS[type](leadId);
+}
+
+/**
+ * Schedule an automation follow-up with reschedule safety
+ *
+ * CRITICAL: UTC math only - prevents 2AM messages
+ *
+ * @param leadId - Lead UUID
+ * @param type - Automation follow-up type
+ * @param scheduledAt - When to send (MUST be UTC Date object)
+ * @param followUpId - Database follow-up record ID
+ * @returns Job ID
+ */
+export async function scheduleAutomationFollowUp(
+  leadId: string,
+  type: AutomationFollowUpType,
+  scheduledAt: Date,
+  followUpId: string
+): Promise<string> {
+  // CRITICAL: UTC math only - prevents 2AM messages
+  const now = new Date();
+  const delayMs = Math.max(0, scheduledAt.getTime() - now.getTime());
+
+  // Use deterministic jobId to prevent duplicates on reschedule
+  const jobId = getAutomationJobId(type, leadId);
+
+  // Check if job exists and remove it (reschedule scenario)
+  const existingJob = await followupQueue.getJob(jobId);
+  if (existingJob) {
+    logger.info('Removing existing follow-up job for reschedule', {
+      jobId,
+      leadId,
+      type,
+      oldScheduledFor: existingJob.opts.delay,
+    });
+    await existingJob.remove();
+  }
+
+  // Add new job with deterministic ID
+  const job = await followupQueue.add(
+    'send-automation-followup',
+    {
+      leadId,
+      type,
+      followUpId,
+      scheduledAtUtc: scheduledAt.toISOString(), // Store UTC for logging
+    },
+    {
+      delay: delayMs,
+      jobId, // Deterministic ID prevents duplicates
+    }
+  );
+
+  logger.info('Automation follow-up scheduled', {
+    jobId: job.id,
+    leadId,
+    type,
+    followUpId,
+    scheduledAtUtc: scheduledAt.toISOString(),
+    delayMs,
+  });
+
+  return job.id!;
+}
+
+/**
+ * Cancel an automation follow-up by type and lead
+ *
+ * @param leadId - Lead UUID
+ * @param type - Automation follow-up type to cancel
+ * @returns true if job was found and removed
+ */
+export async function cancelAutomationFollowUp(
+  leadId: string,
+  type: AutomationFollowUpType
+): Promise<boolean> {
+  const jobId = getAutomationJobId(type, leadId);
+  const job = await followupQueue.getJob(jobId);
+
+  if (job) {
+    await job.remove();
+    logger.info('Automation follow-up cancelled', { jobId, leadId, type });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Cancel ALL automation follow-ups for a lead
+ * Used when user responds or opts out
+ *
+ * @param leadId - Lead UUID
+ * @returns Number of jobs cancelled
+ */
+export async function cancelAllAutomationFollowUps(leadId: string): Promise<number> {
+  const types: AutomationFollowUpType[] = [
+    'thinking_24h',
+    'trial_reminder_2h',
+    'trial_followup_24h',
+    'idle_48h',
+  ];
+
+  let cancelled = 0;
+  for (const type of types) {
+    const removed = await cancelAutomationFollowUp(leadId, type);
+    if (removed) cancelled++;
+  }
+
+  if (cancelled > 0) {
+    logger.info('Cancelled all automation follow-ups for lead', { leadId, count: cancelled });
+  }
+
+  return cancelled;
+}
+
+// ============================================================================
 // Exports
 // ============================================================================
 

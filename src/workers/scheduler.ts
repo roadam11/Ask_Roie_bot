@@ -4,6 +4,7 @@
  * Cron-based scheduler that manages periodic tasks:
  * - Follow-up scheduling (every 5 minutes)
  * - Calendly polling (every 5 minutes)
+ * - Idle lead detection (every 15 minutes)
  *
  * @usage
  * npm run worker:scheduler
@@ -14,6 +15,10 @@
 import schedule from 'node-schedule';
 import * as FollowUpModel from '../models/followup.model.js';
 import { scheduleFollowUp, scheduleCalendlyPoll, setupQueueListeners, closeAllQueues } from './queue.js';
+import {
+  findIdleLeads,
+  scheduleFollowUpForLead,
+} from '../services/follow-up-decision.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================================================
@@ -35,6 +40,12 @@ const MAX_FOLLOWUPS_PER_RUN = 50;
  * Calendly polling schedule (also every 5 minutes, offset by 2 minutes)
  */
 const CALENDLY_CRON = '2-57/5 * * * *';
+
+/**
+ * Idle lead detection schedule (every 15 minutes, offset by 7 minutes)
+ * Detects leads that have been idle for 48-72 hours
+ */
+const IDLE_DETECTION_CRON = '7,22,37,52 * * * *';
 
 // ============================================================================
 // Follow-Up Scheduler Logic
@@ -157,11 +168,94 @@ async function runCalendlyPollNow(): Promise<void> {
 }
 
 // ============================================================================
+// Idle Lead Detection Logic
+// ============================================================================
+
+/**
+ * Find idle leads (48-72h no response) and schedule follow-ups
+ * CRITICAL: UTC math only - prevents 2AM messages
+ */
+async function detectIdleLeads(): Promise<void> {
+  const startTime = Date.now();
+
+  try {
+    logger.info('Checking for idle leads...');
+
+    // Find leads that are 48-72h idle
+    const idleLeads = await findIdleLeads();
+
+    if (idleLeads.length === 0) {
+      logger.debug('No idle leads found');
+      return;
+    }
+
+    logger.info(`Found ${idleLeads.length} idle leads`);
+
+    // Schedule follow-ups for each
+    let scheduled = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (const lead of idleLeads) {
+      try {
+        const result = await scheduleFollowUpForLead(lead);
+
+        if (result.success) {
+          scheduled++;
+          logger.debug('Idle follow-up scheduled', {
+            leadId: lead.id,
+            jobId: result.jobId,
+          });
+        } else {
+          skipped++;
+          logger.debug('Idle follow-up skipped', {
+            leadId: lead.id,
+            reason: result.error,
+          });
+        }
+      } catch (error) {
+        const errorMsg = (error as Error).message;
+        errors.push(`${lead.id}: ${errorMsg}`);
+        skipped++;
+
+        logger.error('Failed to schedule idle follow-up', {
+          leadId: lead.id,
+          error: errorMsg,
+        });
+      }
+    }
+
+    const duration = Date.now() - startTime;
+
+    logger.info('Idle lead detection complete', {
+      duration: `${duration}ms`,
+      scheduled,
+      skipped,
+      total: idleLeads.length,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (error) {
+    logger.error('Error in idle lead detection', {
+      error: (error as Error).message,
+      stack: (error as Error).stack,
+    });
+  }
+}
+
+/**
+ * Run idle detection immediately (for testing or manual trigger)
+ */
+async function runIdleDetectionNow(): Promise<void> {
+  await detectIdleLeads();
+}
+
+// ============================================================================
 // Scheduler Setup
 // ============================================================================
 
 let followUpSchedulerJob: schedule.Job | null = null;
 let calendlySchedulerJob: schedule.Job | null = null;
+let idleDetectionJob: schedule.Job | null = null;
 
 /**
  * Start all schedulers
@@ -170,6 +264,7 @@ function startScheduler(): void {
   logger.info('Starting background job schedulers...', {
     followUpSchedule: SCHEDULE_CRON,
     calendlySchedule: CALENDLY_CRON,
+    idleDetectionSchedule: IDLE_DETECTION_CRON,
     maxFollowUpsPerRun: MAX_FOLLOWUPS_PER_RUN,
   });
 
@@ -188,7 +283,13 @@ function startScheduler(): void {
     await scheduleCalendlyPollJob();
   });
 
-  // Run both immediately on startup
+  // Schedule idle lead detection (every 15 minutes)
+  idleDetectionJob = schedule.scheduleJob(IDLE_DETECTION_CRON, async () => {
+    logger.debug('Idle detection triggered by cron');
+    await detectIdleLeads();
+  });
+
+  // Run all immediately on startup
   scheduleDueFollowUps().catch((error) => {
     logger.error('Initial follow-up scheduler run failed', { error });
   });
@@ -197,9 +298,14 @@ function startScheduler(): void {
     logger.error('Initial Calendly poll failed', { error });
   });
 
+  detectIdleLeads().catch((error) => {
+    logger.error('Initial idle detection failed', { error });
+  });
+
   logger.info('All schedulers started', {
     followUpNextRun: followUpSchedulerJob.nextInvocation()?.toISOString(),
     calendlyNextRun: calendlySchedulerJob.nextInvocation()?.toISOString(),
+    idleDetectionNextRun: idleDetectionJob.nextInvocation()?.toISOString(),
   });
 }
 
@@ -217,6 +323,12 @@ function stopScheduler(): void {
     calendlySchedulerJob.cancel();
     calendlySchedulerJob = null;
     logger.info('Calendly scheduler stopped');
+  }
+
+  if (idleDetectionJob) {
+    idleDetectionJob.cancel();
+    idleDetectionJob = null;
+    logger.info('Idle detection scheduler stopped');
   }
 }
 
@@ -260,9 +372,12 @@ export {
   stopScheduler,
   scheduleDueFollowUps,
   scheduleCalendlyPollJob,
+  detectIdleLeads,
   runFollowUpSchedulerNow,
   runCalendlyPollNow,
+  runIdleDetectionNow,
   SCHEDULE_CRON,
   CALENDLY_CRON,
+  IDLE_DETECTION_CRON,
   MAX_FOLLOWUPS_PER_RUN,
 };

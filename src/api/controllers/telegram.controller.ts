@@ -20,7 +20,11 @@ import * as ClaudeService from '../../services/claude.service.js';
 import type { ToolExecutor } from '../../services/claude.service.js';
 import * as TelegramService from '../../services/telegram.service.js';
 import type { TelegramUpdate } from '../../services/telegram.service.js';
-import type { Lead, UpdateLeadInput } from '../../types/index.js';
+import {
+  onUserResponse,
+  onLeadStateChange,
+} from '../../services/follow-up-decision.service.js';
+import type { Lead, UpdateLeadInput, LeadState } from '../../types/index.js';
 
 // ============================================================================
 // Webhook Handler
@@ -137,6 +141,9 @@ async function processMessage(parsed: {
         chatId: maskChatId(chatId),
       });
     }
+
+    // Cancel any pending follow-ups - user is responding!
+    await onUserResponse(lead.id);
 
     // Check for opt-out keywords
     if (isOptOutMessage(messageText)) {
@@ -290,6 +297,21 @@ async function processUpdateLeadState(
     }
   }
 
+  // Handle lead_state for follow-up automation
+  let newLeadState: LeadState | undefined;
+  if (input.lead_state && typeof input.lead_state === 'string') {
+    newLeadState = input.lead_state as LeadState;
+    updateData.lead_state = newLeadState;
+  }
+
+  // Auto-map status → lead_state ONLY if lead_state wasn't explicitly set
+  if (!updateData.lead_state) {
+    if (input.status === 'considering' || input.status === 'hesitant') {
+      newLeadState = 'thinking';
+      updateData.lead_state = 'thinking';
+    }
+  }
+
   // Update lead if there are changes
   if (Object.keys(updateData).length === 0) {
     const lead = await LeadService.findLeadById(leadId);
@@ -301,6 +323,21 @@ async function processUpdateLeadState(
 
   if (!updatedLead) {
     throw new Error(`Failed to update lead: ${leadId}`);
+  }
+
+  // Trigger follow-up automation if lead_state changed
+  if (newLeadState) {
+    try {
+      await onLeadStateChange(leadId, newLeadState);
+      logger.debug('Follow-up automation triggered', { leadId, newLeadState });
+    } catch (error) {
+      // Don't fail the update if follow-up scheduling fails
+      logger.error('Failed to trigger follow-up automation', {
+        leadId,
+        newLeadState,
+        error: (error as Error).message,
+      });
+    }
   }
 
   // Try to auto-qualify if conditions are met

@@ -32,9 +32,34 @@ export enum MessageStatus {
 export type FollowUpStatus = 'pending' | 'sent' | 'cancelled';
 
 /**
- * Follow-up type/timing (matches database schema)
+ * Follow-up type/timing - Legacy types (matches database schema)
  */
-export type FollowUpType = '24h' | '72h' | '7d';
+export type LegacyFollowUpType = '24h' | '72h' | '7d';
+
+/**
+ * Follow-up type - New automation types
+ */
+export type AutomationFollowUpType =
+  | 'thinking_24h'        // 24h after "אחשוב על זה"
+  | 'trial_reminder_2h'   // 2h before trial lesson
+  | 'trial_followup_24h'  // 24h after trial lesson
+  | 'idle_48h';           // 48h no response
+
+/**
+ * All follow-up types (legacy + automation)
+ */
+export type FollowUpType = LegacyFollowUpType | AutomationFollowUpType;
+
+/**
+ * Lead state for follow-up automation (separate from sales pipeline status)
+ */
+export type LeadState =
+  | 'new'              // First contact, no conversation yet
+  | 'engaged'          // Active conversation in progress
+  | 'thinking'         // User said "אחשוב על זה" or similar
+  | 'trial_scheduled'  // Trial lesson booked
+  | 'converted'        // Became paying student
+  | 'closed';          // Not relevant / opted out
 
 /**
  * Analytics event types
@@ -132,6 +157,38 @@ export interface Lead {
   /** Whether this lead needs human follow-up */
   needs_human_followup?: boolean;
 
+  // ============================================================================
+  // Follow-up Automation Fields
+  // ============================================================================
+
+  /** Lead state for follow-up automation (separate from sales status) */
+  lead_state?: LeadState;
+
+  /** When the next follow-up is scheduled */
+  follow_up_scheduled_at?: Date;
+
+  /** Type of the scheduled follow-up */
+  follow_up_type?: AutomationFollowUpType;
+
+  /** Number of follow-ups sent (max 3) */
+  follow_up_count?: number;
+
+  /** Priority of current follow-up (0-100) */
+  follow_up_priority?: number;
+
+  /** When trial lesson is scheduled */
+  trial_scheduled_at?: Date;
+
+  /** When trial lesson was completed */
+  trial_completed_at?: Date;
+
+  /** When Roie last manually contacted (blocks automation for 48h) */
+  human_contacted_at?: Date;
+
+  // ============================================================================
+  // Message Tracking Fields
+  // ============================================================================
+
   /** Timestamp of last message received from user */
   last_user_message_at?: Date;
 
@@ -180,6 +237,15 @@ export interface UpdateLeadInput {
   last_user_message_at?: Date;
   last_bot_message_at?: Date;
   last_followup_sent_at?: Date;
+  // Follow-up automation fields
+  lead_state?: LeadState;
+  follow_up_scheduled_at?: Date;
+  follow_up_type?: AutomationFollowUpType;
+  follow_up_count?: number;
+  follow_up_priority?: number;
+  trial_scheduled_at?: Date;
+  trial_completed_at?: Date;
+  human_contacted_at?: Date;
 }
 
 // ============================================================================
@@ -273,6 +339,12 @@ export interface FollowUp {
   /** Template name */
   template_name?: string;
 
+  /** Priority (0-100, higher = more important) */
+  priority?: number;
+
+  /** BullMQ job ID for cancellation */
+  job_id?: string;
+
   /** Record creation timestamp */
   created_at: Date;
 
@@ -288,6 +360,8 @@ export interface CreateFollowUpInput {
   type: FollowUpType;
   scheduled_for: Date;
   template_name?: string;
+  priority?: number;
+  job_id?: string;
 }
 
 // ============================================================================

@@ -8,9 +8,15 @@ import type { Lead, FollowUp, FollowUpType } from '../types/index.js';
 // Follow-up timing constants (in hours)
 const FOLLOWUP_COOLDOWN_HOURS = 24;
 const FOLLOWUP_INTERVALS: Record<FollowUpType, number> = {
+  // Legacy types
   '24h': 24,
   '72h': 72,
   '7d': 168,
+  // Automation types (in hours)
+  'thinking_24h': 24,
+  'trial_reminder_2h': 2,
+  'trial_followup_24h': 24,
+  'idle_48h': 48,
 };
 
 /**
