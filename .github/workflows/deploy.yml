@@ -1,0 +1,16 @@
+name: Railway Auto Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Trigger Railway Deployment
+        run: |
+          echo "Railway will auto-detect this push and deploy all services"
+          echo "If followup-worker still doesn't deploy, webhook needs fixing in Railway dashboard"

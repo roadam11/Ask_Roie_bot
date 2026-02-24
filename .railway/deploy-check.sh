@@ -1,0 +1,10 @@
+#!/bin/bash
+echo "Checking Railway services..."
+echo "Expected services:"
+echo "  - Ask Roie bot"
+echo "  - calendly-worker"
+echo "  - scheduler"
+echo "  - followup-worker"
+echo ""
+echo "If followup-worker shows REMOVED, manual intervention needed:"
+echo "Railway → followup-worker → Settings → GitHub → Reconnect Repository"
