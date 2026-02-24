@@ -123,8 +123,8 @@ async function createTestLead(): Promise<string> {
   log.step('Creating test lead...');
 
   const result = await pool.query(
-    `INSERT INTO leads (phone, name, source, status, lead_state, created_at, updated_at)
-     VALUES ($1, $2, 'e2e-test', 'new', 'engaged', NOW(), NOW())
+    `INSERT INTO leads (phone, name, status, lead_state, created_at, updated_at)
+     VALUES ($1, $2, 'new', 'engaged', NOW(), NOW())
      RETURNING id`,
     [TEST_PHONE, `${TEST_PREFIX} Test User`]
   );
