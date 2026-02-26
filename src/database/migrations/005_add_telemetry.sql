@@ -155,6 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_started_at ON conversations(started
 -- AI telemetry indexes
 CREATE INDEX IF NOT EXISTS idx_telemetry_lead_id ON ai_telemetry(lead_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_conversation_id ON ai_telemetry(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_telemetry_message_id ON ai_telemetry(message_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_agent_id ON ai_telemetry(agent_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_prompt_version_id ON ai_telemetry(prompt_version_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_detected_intent ON ai_telemetry(detected_intent);
@@ -235,3 +236,19 @@ COMMENT ON TABLE ai_telemetry IS 'Detailed AI interaction telemetry for debuggin
 COMMENT ON COLUMN ai_telemetry.detected_intent IS 'Primary intent detected from user message';
 COMMENT ON COLUMN ai_telemetry.reasoning IS 'AI reasoning explanation for the response';
 COMMENT ON COLUMN ai_telemetry.tool_calls IS 'JSON array of tool calls made during this interaction';
+
+-- ============================================================================
+-- TRIGGERS: Auto-update updated_at timestamp
+-- ============================================================================
+
+-- Reuse the function from 004 (or create if not exists)
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Note: prompt_versions doesn't have updated_at by design (immutable versions)
+-- conversations doesn't have updated_at (use ended_at instead)

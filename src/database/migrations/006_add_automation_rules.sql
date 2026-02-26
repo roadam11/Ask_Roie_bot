@@ -149,6 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_rules_priority ON automation_rules(priority DESC)
 -- Automation executions indexes
 CREATE INDEX IF NOT EXISTS idx_executions_rule_id ON automation_executions(rule_id);
 CREATE INDEX IF NOT EXISTS idx_executions_lead_id ON automation_executions(lead_id);
+CREATE INDEX IF NOT EXISTS idx_executions_followup_id ON automation_executions(followup_id) WHERE followup_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_executions_status ON automation_executions(status);
 CREATE INDEX IF NOT EXISTS idx_executions_scheduled_for ON automation_executions(scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_executions_created_at ON automation_executions(created_at);
@@ -373,3 +374,30 @@ COMMENT ON COLUMN automation_rules.trigger_condition IS 'JSON conditions that mu
 COMMENT ON COLUMN automation_rules.message_variants IS 'JSON array of message variants for A/B testing';
 COMMENT ON COLUMN automation_rules.send_window_start IS 'Earliest time of day to send messages (respects timezone)';
 COMMENT ON COLUMN automation_rules.send_window_end IS 'Latest time of day to send messages (respects timezone)';
+
+-- ============================================================================
+-- TRIGGERS: Auto-update updated_at timestamp
+-- ============================================================================
+
+-- Reuse the function from 004 (or create if not exists)
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Automation rules trigger
+DROP TRIGGER IF EXISTS update_automation_rules_updated_at ON automation_rules;
+CREATE TRIGGER update_automation_rules_updated_at
+    BEFORE UPDATE ON automation_rules
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Automation metrics trigger
+DROP TRIGGER IF EXISTS update_automation_metrics_updated_at ON automation_metrics;
+CREATE TRIGGER update_automation_metrics_updated_at
+    BEFORE UPDATE ON automation_metrics
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();

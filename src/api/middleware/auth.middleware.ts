@@ -1,12 +1,18 @@
 /**
  * Authentication Middleware
  *
- * JWT-based authentication for dashboard API routes.
- * Validates tokens and attaches user info to request.
+ * Secure JWT-based authentication with:
+ * - Access Token (15min) - returned in response body
+ * - Refresh Token (30 days) - stored in httpOnly cookie
+ *
+ * Security features:
+ * - httpOnly cookies prevent XSS token theft
+ * - Short-lived access tokens minimize exposure
+ * - Secure + SameSite cookies prevent CSRF
  */
 
-import { Request, Response, NextFunction } from 'express';
-import jwt, { SignOptions } from 'jsonwebtoken';
+import { Request, Response, NextFunction, CookieOptions } from 'express';
+import jwt, { SignOptions, JwtPayload } from 'jsonwebtoken';
 import logger from '../../utils/logger.js';
 
 // ============================================================================
@@ -24,18 +30,195 @@ export interface AuthenticatedRequest extends Request {
   user?: AuthUser;
 }
 
+interface TokenPayload extends JwtPayload {
+  id: string;
+  email: string;
+  accountId: string;
+  role: 'admin' | 'manager' | 'viewer';
+  type: 'access' | 'refresh';
+}
+
 // ============================================================================
-// JWT Secret
+// Configuration
 // ============================================================================
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET + '-refresh';
+
+// Token expiry times
+const ACCESS_TOKEN_EXPIRY = 15 * 60; // 15 minutes in seconds
+const REFRESH_TOKEN_EXPIRY = 30 * 24 * 60 * 60; // 30 days in seconds
+
+// Cookie configuration
+const REFRESH_TOKEN_COOKIE_NAME = 'refreshToken';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+const COOKIE_OPTIONS: CookieOptions = {
+  httpOnly: true, // Prevents JavaScript access (XSS protection)
+  secure: IS_PRODUCTION, // HTTPS only in production
+  sameSite: IS_PRODUCTION ? 'strict' : 'lax', // CSRF protection
+  path: '/api/auth', // Only sent to auth endpoints
+  maxAge: REFRESH_TOKEN_EXPIRY * 1000, // Convert to milliseconds
+};
+
+// ============================================================================
+// Token Generation
+// ============================================================================
+
+/**
+ * Generate short-lived access token (15 minutes)
+ * Used for API authentication, stored in memory/localStorage
+ */
+export function generateAccessToken(user: AuthUser): string {
+  const payload: Omit<TokenPayload, 'iat' | 'exp'> = {
+    id: user.id,
+    email: user.email,
+    accountId: user.accountId,
+    role: user.role,
+    type: 'access',
+  };
+
+  const options: SignOptions = { expiresIn: ACCESS_TOKEN_EXPIRY };
+  return jwt.sign(payload, JWT_SECRET, options);
+}
+
+/**
+ * Generate long-lived refresh token (30 days)
+ * Stored in httpOnly cookie, used to obtain new access tokens
+ */
+export function generateRefreshToken(user: AuthUser): string {
+  const payload: Omit<TokenPayload, 'iat' | 'exp'> = {
+    id: user.id,
+    email: user.email,
+    accountId: user.accountId,
+    role: user.role,
+    type: 'refresh',
+  };
+
+  const options: SignOptions = { expiresIn: REFRESH_TOKEN_EXPIRY };
+  return jwt.sign(payload, JWT_REFRESH_SECRET, options);
+}
+
+/**
+ * Generate both tokens for login response
+ */
+export function generateTokenPair(user: AuthUser): {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+} {
+  return {
+    accessToken: generateAccessToken(user),
+    refreshToken: generateRefreshToken(user),
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  };
+}
+
+// ============================================================================
+// Cookie Management
+// ============================================================================
+
+/**
+ * Set refresh token as httpOnly cookie
+ */
+export function setRefreshTokenCookie(res: Response, token: string): void {
+  res.cookie(REFRESH_TOKEN_COOKIE_NAME, token, COOKIE_OPTIONS);
+}
+
+/**
+ * Clear refresh token cookie (for logout)
+ */
+export function clearRefreshTokenCookie(res: Response): void {
+  res.cookie(REFRESH_TOKEN_COOKIE_NAME, '', {
+    ...COOKIE_OPTIONS,
+    maxAge: 0,
+  });
+}
+
+/**
+ * Get refresh token from cookie
+ */
+export function getRefreshTokenFromCookie(req: Request): string | null {
+  return req.cookies?.[REFRESH_TOKEN_COOKIE_NAME] || null;
+}
+
+// ============================================================================
+// Token Validation
+// ============================================================================
+
+/**
+ * Verify and decode access token
+ */
+export function verifyAccessToken(token: string): AuthUser | null {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
+
+    if (decoded.type !== 'access') {
+      logger.warn('Token type mismatch - expected access token');
+      return null;
+    }
+
+    return {
+      id: decoded.id,
+      email: decoded.email,
+      accountId: decoded.accountId,
+      role: decoded.role,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Verify and decode refresh token
+ */
+export function verifyRefreshToken(token: string): AuthUser | null {
+  try {
+    const decoded = jwt.verify(token, JWT_REFRESH_SECRET) as TokenPayload;
+
+    if (decoded.type !== 'refresh') {
+      logger.warn('Token type mismatch - expected refresh token');
+      return null;
+    }
+
+    return {
+      id: decoded.id,
+      email: decoded.email,
+      accountId: decoded.accountId,
+      role: decoded.role,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Refresh access token using refresh token
+ * Returns new access token if refresh token is valid
+ */
+export function refreshAccessToken(refreshToken: string): {
+  accessToken: string;
+  expiresIn: number;
+} | null {
+  const user = verifyRefreshToken(refreshToken);
+
+  if (!user) {
+    return null;
+  }
+
+  return {
+    accessToken: generateAccessToken(user),
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  };
+}
 
 // ============================================================================
 // Middleware
 // ============================================================================
 
 /**
- * Verify JWT token and attach user to request
+ * Verify JWT access token and attach user to request
+ * Token should be in Authorization header: Bearer <token>
  */
 export function authenticate(
   req: AuthenticatedRequest,
@@ -64,29 +247,18 @@ export function authenticate(
       return;
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
+    // Verify access token
+    const user = verifyAccessToken(token);
+
+    if (!user) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
 
     // Attach user to request
-    req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      accountId: decoded.accountId,
-      role: decoded.role,
-    };
-
+    req.user = user;
     next();
   } catch (error) {
-    if (error instanceof jwt.TokenExpiredError) {
-      res.status(401).json({ error: 'Token expired' });
-      return;
-    }
-
-    if (error instanceof jwt.JsonWebTokenError) {
-      res.status(401).json({ error: 'Invalid token' });
-      return;
-    }
-
     logger.error('Authentication error', { error: (error as Error).message });
     res.status(500).json({ error: 'Authentication failed' });
   }
@@ -116,24 +288,8 @@ export function requireRole(...allowedRoles: AuthUser['role'][]) {
 }
 
 /**
- * Generate JWT token for user
- */
-export function generateToken(user: AuthUser, expiresInSeconds: number = 86400): string {
-  const options: SignOptions = { expiresIn: expiresInSeconds };
-  return jwt.sign(
-    {
-      id: user.id,
-      email: user.email,
-      accountId: user.accountId,
-      role: user.role,
-    },
-    JWT_SECRET,
-    options
-  );
-}
-
-/**
  * Optional authentication - doesn't fail if no token
+ * Useful for endpoints that work differently for authenticated users
  */
 export function optionalAuth(
   req: AuthenticatedRequest,
@@ -142,19 +298,46 @@ export function optionalAuth(
 ): void {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    next();
-    return;
-  }
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const user = verifyAccessToken(token);
 
-  const token = authHeader.slice(7);
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
-    req.user = decoded;
-  } catch {
-    // Ignore invalid tokens for optional auth
+    if (user) {
+      req.user = user;
+    }
   }
 
   next();
 }
+
+// ============================================================================
+// Legacy Support (for backwards compatibility)
+// ============================================================================
+
+/**
+ * @deprecated Use generateAccessToken instead
+ */
+export function generateToken(user: AuthUser, expiresInSeconds: number = ACCESS_TOKEN_EXPIRY): string {
+  const options: SignOptions = { expiresIn: expiresInSeconds };
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      accountId: user.accountId,
+      role: user.role,
+      type: 'access',
+    },
+    JWT_SECRET,
+    options
+  );
+}
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+export {
+  ACCESS_TOKEN_EXPIRY,
+  REFRESH_TOKEN_EXPIRY,
+  REFRESH_TOKEN_COOKIE_NAME,
+};

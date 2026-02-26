@@ -10,6 +10,7 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import config from './config/index.js';
 import logger from './utils/logger.js';
 import { connectDatabase, disconnectDatabase, checkDatabaseHealth } from './database/connection.js';
@@ -55,6 +56,9 @@ app.use(express.urlencoded({
   extended: true,
   limit: '1mb',
 }));
+
+// Cookie parser for refresh token cookies
+app.use(cookieParser());
 
 // ============================================================================
 // Request Logging
@@ -108,6 +112,8 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
 import whatsappRoutes from './api/routes/whatsapp.routes.js';
 import telegramRoutes from './api/routes/telegram.routes.js';
 import adminRoutes from './api/routes/admin.routes.js';
+import authRoutes from './api/routes/auth.routes.js';
+import dashboardRoutes from './api/routes/dashboard.routes.js';
 import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
@@ -118,6 +124,10 @@ app.use('/webhook/telegram', telegramRoutes);
 
 // Admin routes (protected with Basic Auth)
 app.use('/admin', adminAuth, adminRoutes);
+
+// Dashboard API routes (JWT auth)
+app.use('/api/auth', authRoutes);
+app.use('/api', dashboardRoutes);
 
 // Placeholder root route
 app.get('/', (_req: Request, res: Response) => {
