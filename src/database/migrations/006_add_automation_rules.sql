@@ -251,7 +251,7 @@ VALUES (
     'Reminder 2 hours before scheduled trial lesson',
     'trial_reminder',
     '{"lead_state": "trial_scheduled"}',
-    -2,
+    2,
     0,
     1,
     'תזכורת: יש לנו שיעור ניסיון עוד שעתיים! 📚 מחכה לך בזום.',

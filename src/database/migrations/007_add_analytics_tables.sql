@@ -546,8 +546,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS mv_conversion_by_segment AS
 SELECT
     COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001'::UUID) as agent_id,
     DATE_TRUNC('week', l.created_at)::DATE as week_start,
-    COALESCE(l.subject, 'unknown') as subject,
-    COALESCE(l.education_level, 'unknown') as education_level,
+    COALESCE(l.subjects[1], 'unknown') as subject,
+    COALESCE(l.level, 'unknown') as education_level,
     COUNT(*) as total_leads,
     COUNT(*) FILTER (WHERE l.status = 'booked') as booked_count,
     COUNT(*) FILTER (WHERE l.status = 'lost') as lost_count,
@@ -561,8 +561,8 @@ WHERE l.created_at > NOW() - INTERVAL '90 days'
 GROUP BY
     COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001'::UUID),
     DATE_TRUNC('week', l.created_at)::DATE,
-    COALESCE(l.subject, 'unknown'),
-    COALESCE(l.education_level, 'unknown');
+    COALESCE(l.subjects[1], 'unknown'),
+    COALESCE(l.level, 'unknown');
 
 -- Index for the materialized view
 CREATE INDEX IF NOT EXISTS idx_mv_conversion_agent_week
