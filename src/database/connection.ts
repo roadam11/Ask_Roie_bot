@@ -316,6 +316,17 @@ async function checkDatabaseHealth(): Promise<{
   return health;
 }
 
+/**
+ * Execute a query and return rows directly (convenience wrapper)
+ */
+async function queryRows<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const result = await query<T>(sql, params);
+  return result.rows;
+}
+
 // ============================================================================
 // Exports
 // ============================================================================
@@ -324,6 +335,7 @@ export {
   connectDatabase,
   disconnectDatabase,
   query,
+  queryRows,
   queryOne,
   transaction,
   checkDatabaseHealth,

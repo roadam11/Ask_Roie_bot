@@ -114,6 +114,10 @@ import telegramRoutes from './api/routes/telegram.routes.js';
 import adminRoutes from './api/routes/admin.routes.js';
 import authRoutes from './api/routes/auth.routes.js';
 import dashboardRoutes from './api/routes/dashboard.routes.js';
+import analyticsRoutes from './api/routes/analytics.routes.js';
+import conversationsRoutes from './api/routes/conversations.routes.js';
+import alertsRoutes from './api/routes/alerts.routes.js';
+import telemetryRoutes from './api/routes/telemetry.routes.js';
 import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
@@ -128,6 +132,10 @@ app.use('/admin', adminAuth, adminRoutes);
 // Dashboard API routes (JWT auth)
 app.use('/api/auth', authRoutes);
 app.use('/api', dashboardRoutes);
+app.use('/api', analyticsRoutes);
+app.use('/api', conversationsRoutes);
+app.use('/api', alertsRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 
 // Placeholder root route
 app.get('/', (_req: Request, res: Response) => {

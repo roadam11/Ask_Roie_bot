@@ -14,10 +14,10 @@ CREATE TABLE IF NOT EXISTS conversation_search (
     lead_id UUID NOT NULL,
     agent_id UUID,
 
-    -- Searchable content
+    -- Searchable content (using 'simple' config for Hebrew compatibility)
     content_text TEXT NOT NULL,
     content_tsvector TSVECTOR GENERATED ALWAYS AS (
-        to_tsvector('hebrew', content_text)
+        to_tsvector('simple', content_text)
     ) STORED,
 
     -- Denormalized for fast filtering
@@ -626,7 +626,7 @@ BEGIN
     SELECT
         cs.conversation_id,
         cs.lead_id,
-        ts_headline('hebrew', cs.content_text, plainto_tsquery('hebrew', p_search_text),
+        ts_headline('simple', cs.content_text, plainto_tsquery('simple', p_search_text),
             'MaxWords=50, MinWords=20, StartSel=<mark>, StopSel=</mark>') as content_snippet,
         cs.platform,
         cs.primary_intent,
@@ -635,10 +635,10 @@ BEGIN
         cs.message_count,
         cs.first_message_at,
         cs.last_message_at,
-        ts_rank(cs.content_tsvector, plainto_tsquery('hebrew', p_search_text)) as search_rank
+        ts_rank(cs.content_tsvector, plainto_tsquery('simple', p_search_text)) as search_rank
     FROM conversation_search cs
     WHERE
-        (p_search_text IS NULL OR cs.content_tsvector @@ plainto_tsquery('hebrew', p_search_text))
+        (p_search_text IS NULL OR cs.content_tsvector @@ plainto_tsquery('simple', p_search_text))
         AND (p_agent_id IS NULL OR cs.agent_id = p_agent_id)
         AND (p_platform IS NULL OR cs.platform = p_platform)
         AND (p_intent IS NULL OR cs.primary_intent = p_intent)
@@ -649,7 +649,7 @@ BEGIN
         AND (p_date_to IS NULL OR cs.last_message_at <= p_date_to)
     ORDER BY
         CASE WHEN p_search_text IS NOT NULL
-            THEN ts_rank(cs.content_tsvector, plainto_tsquery('hebrew', p_search_text))
+            THEN ts_rank(cs.content_tsvector, plainto_tsquery('simple', p_search_text))
             ELSE 0
         END DESC,
         cs.last_message_at DESC
