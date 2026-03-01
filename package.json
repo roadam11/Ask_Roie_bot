@@ -24,8 +24,7 @@
     "typecheck": "tsc --noEmit",
     "worker:followup": "tsx src/workers/followup.worker.ts",
     "worker:calendly": "tsx src/workers/calendly.worker.ts",
-    "worker:scheduler": "tsx src/workers/scheduler.ts",
-    "postinstall": "npm run migrate"
+    "worker:scheduler": "tsx src/workers/scheduler.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
