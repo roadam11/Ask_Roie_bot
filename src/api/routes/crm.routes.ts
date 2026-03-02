@@ -6,10 +6,12 @@
  * so these endpoints take precedence.
  *
  * All routes require JWT authentication.
+ * All async handlers wrapped in asyncHandler to prevent unhandled rejections.
  */
 
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.middleware.js';
+import { asyncHandler } from '../middleware/error-handler.js';
 import { dashboardRateLimiter, writeRateLimiter } from '../middleware/rateLimit.middleware.js';
 import * as CRM from '../controllers/crm.controller.js';
 
@@ -21,33 +23,33 @@ router.use(dashboardRateLimiter);
 // ── Leads ──────────────────────────────────────────────────────────────────────
 
 // IMPORTANT: /leads/cursor must come before /leads/:id
-router.get('/leads/cursor',  CRM.getLeadsCursor);
-router.get('/leads',         CRM.getLeads);
-router.get('/leads/:id',     CRM.getLeadById);
-router.patch('/leads/:id',   writeRateLimiter, CRM.updateLead);
-router.delete('/leads/:id',  writeRateLimiter, CRM.deleteLead);
+router.get('/leads/cursor',  asyncHandler(CRM.getLeadsCursor));
+router.get('/leads',         asyncHandler(CRM.getLeads));
+router.get('/leads/:id',     asyncHandler(CRM.getLeadById));
+router.patch('/leads/:id',   writeRateLimiter, asyncHandler(CRM.updateLead));
+router.delete('/leads/:id',  writeRateLimiter, asyncHandler(CRM.deleteLead));
 
 // ── Conversations ──────────────────────────────────────────────────────────────
 
-router.get('/conversations',                             CRM.getConversations);
-router.get('/conversations/:id',                         CRM.getConversationById);
-router.get('/conversations/:id/messages/cursor',         CRM.getMessagesCursor);
-router.get('/conversations/:id/messages',                CRM.getMessages);
-router.post('/conversations/:id/messages', writeRateLimiter, CRM.sendMessage);
-router.patch('/conversations/:id/status',  writeRateLimiter, CRM.updateConversationStatus);
+router.get('/conversations',                             asyncHandler(CRM.getConversations));
+router.get('/conversations/:id',                         asyncHandler(CRM.getConversationById));
+router.get('/conversations/:id/messages/cursor',         asyncHandler(CRM.getMessagesCursor));
+router.get('/conversations/:id/messages',                asyncHandler(CRM.getMessages));
+router.post('/conversations/:id/messages', writeRateLimiter, asyncHandler(CRM.sendMessage));
+router.patch('/conversations/:id/status',  writeRateLimiter, asyncHandler(CRM.updateConversationStatus));
 
 // ── Analytics ──────────────────────────────────────────────────────────────────
 
-router.get('/analytics/overview',   CRM.getOverview);
-router.get('/analytics/dashboard', CRM.getAnalyticsDashboard);
+router.get('/analytics/overview',   asyncHandler(CRM.getOverview));
+router.get('/analytics/dashboard', asyncHandler(CRM.getAnalyticsDashboard));
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
-router.get('/settings',                       CRM.getSettings);
-router.patch('/settings',   writeRateLimiter, CRM.updateSettings);
+router.get('/settings',                       asyncHandler(CRM.getSettings));
+router.patch('/settings',   writeRateLimiter, asyncHandler(CRM.updateSettings));
 
 // Knowledge base — multipart upload
-router.post('/settings/knowledge',        writeRateLimiter, CRM.uploadKnowledgeDocument);
-router.delete('/settings/knowledge/:id',  writeRateLimiter, CRM.deleteKnowledgeDocument);
+router.post('/settings/knowledge',        writeRateLimiter, asyncHandler(CRM.uploadKnowledgeDocument));
+router.delete('/settings/knowledge/:id',  writeRateLimiter, asyncHandler(CRM.deleteKnowledgeDocument));
 
 export default router;

@@ -202,9 +202,9 @@ export function notFoundHandler(
  * Async handler wrapper
  * Wraps async route handlers to catch errors
  */
-export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>
-): (req: Request, res: Response, next: NextFunction) => void {
+export function asyncHandler<Req extends Request = Request>(
+  fn: (req: Req, res: Response, next: NextFunction) => Promise<unknown>
+): (req: Req, res: Response, next: NextFunction) => void {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };

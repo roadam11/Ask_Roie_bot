@@ -559,7 +559,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
   const [revenueRes, funnelRes, aiPerfRes, activityRes] = await Promise.all([
     // Revenue: actual bookings per day (last 7 days)
     query<{ date: string; actual: string }>(
-      `SELECT DATE(l.booked_at) as date, COALESCE(SUM(l.lead_value), 0) as actual
+      `SELECT DATE(l.booked_at)::text as date, COALESCE(SUM(l.lead_value), 0) as actual
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE l.status = 'booked'
@@ -753,7 +753,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
 
     // 4. Messages per day over period
     query<{ date: string; count: string }>(
-      `SELECT DATE(m.created_at) AS date, COUNT(*) AS count
+      `SELECT DATE(m.created_at)::text AS date, COUNT(*) AS count
        FROM messages m
        JOIN leads l ON m.lead_id = l.id
        LEFT JOIN agents a ON l.agent_id = a.id
