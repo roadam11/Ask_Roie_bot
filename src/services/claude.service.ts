@@ -17,6 +17,9 @@ import config from '../config/index.js';
 import logger, { logClaude } from '../utils/logger.js';
 import { buildPromptWithContext } from '../prompts/system-prompt.js';
 import type { Lead } from '../types/index.js';
+import type { RawTelemetryPayload } from './telemetry.service.js';
+import { loadSettingsForLead } from './settings.service.js';
+import type { AccountSettings } from './settings.service.js';
 
 // ============================================================================
 // Types
@@ -414,8 +417,11 @@ export async function sendMessage(
 ): Promise<ClaudeResponse> {
   const anthropic = getClient();
 
+  // Load account settings for prompt personalization
+  const settings = await safeLoadSettings(lead.id);
+
   // Build system prompt with lead state and conversation context
-  const systemPrompt = buildPromptWithContext(conversationHistory, lead);
+  const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
 
   // Format messages for Claude
   const messages = formatMessagesForClaude(conversationHistory);
@@ -542,8 +548,11 @@ export async function continueAfterToolUse(
 ): Promise<ClaudeResponse> {
   const anthropic = getClient();
 
+  // Load account settings for prompt personalization
+  const settings = await safeLoadSettings(lead.id);
+
   // Build system prompt
-  const systemPrompt = buildPromptWithContext(conversationHistory, lead);
+  const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
 
   // Format base messages
   const messages = formatMessagesForClaude(conversationHistory);
@@ -587,6 +596,117 @@ export async function continueAfterToolUse(
 }
 
 // ============================================================================
+// Telemetry Helpers
+// ============================================================================
+
+/** Valid detected_intent values per CHECK constraint in migration 005 */
+type DetectedIntent =
+  | 'greeting' | 'inquiry' | 'qualification'
+  | 'objection_price' | 'objection_time' | 'objection_format' | 'objection_trust'
+  | 'booking_intent' | 'booking_confirm' | 'thinking'
+  | 'followup_request' | 'human_request' | 'opt_out' | 'off_topic' | 'unclear';
+
+/**
+ * Infer detected_intent from update_lead_state tool call input.
+ * Returns null if no clear mapping — never fabricates values.
+ */
+function inferIntentFromToolCalls(toolCalls: ToolCall[]): DetectedIntent | null {
+  const leadState = toolCalls.find((tc) => tc.name === 'update_lead_state');
+  if (!leadState) return null;
+
+  const input = leadState.input;
+  if (input.needs_human_followup === true) return 'human_request';
+  if (input.opted_out === true) return 'opt_out';
+  if (input.lead_state === 'thinking') return 'thinking';
+  if (input.status === 'ready_to_book') return 'booking_intent';
+  if (input.objection_type === 'price') return 'objection_price';
+  if (input.objection_type === 'time') return 'objection_time';
+  if (input.objection_type === 'format') return 'objection_format';
+  if (input.objection_type === 'trust') return 'objection_trust';
+  if (input.status === 'qualified') return 'qualification';
+  return null;
+}
+
+/**
+ * Extract structured entities from update_lead_state tool call input.
+ * Only includes fields that were actually set — returns null if empty.
+ */
+function extractEntitiesFromToolCalls(toolCalls: ToolCall[]): Record<string, unknown> | null {
+  const leadState = toolCalls.find((tc) => tc.name === 'update_lead_state');
+  if (!leadState) return null;
+
+  const input = leadState.input;
+  const entities: Record<string, unknown> = {};
+
+  if (input.name) entities.name = input.name;
+  if (input.subjects) entities.subjects = input.subjects;
+  if (input.level) entities.level = input.level;
+  if (input.grade_details) entities.grade_details = input.grade_details;
+  if (input.format_preference) entities.format_preference = input.format_preference;
+  if (input.parent_or_student) entities.parent_or_student = input.parent_or_student;
+  if (input.has_exam !== undefined) entities.has_exam = input.has_exam;
+  if (input.urgency) entities.urgency = input.urgency;
+
+  return Object.keys(entities).length > 0 ? entities : null;
+}
+
+/**
+ * Build RawTelemetryPayload from collected loop data.
+ */
+function buildTelemetryPayload(
+  toolCalls: ToolCall[],
+  reasoning: string,
+  inputTokens: number,
+  outputTokens: number,
+  latencyMs: number,
+  costUsd: number,
+  model: string,
+  isFallback: boolean,
+): RawTelemetryPayload {
+  return {
+    detected_intent: inferIntentFromToolCalls(toolCalls),
+    intent_confidence: null, // No confidence available from tool schema
+    reasoning: reasoning || null,
+    decision_path: toolCalls.length > 0
+      ? toolCalls.map((tc) => ({ tool: tc.name, input: tc.input }))
+      : null,
+    entities_extracted: extractEntitiesFromToolCalls(toolCalls),
+    tool_calls: toolCalls.length > 0
+      ? toolCalls.map((tc) => ({ id: tc.id, name: tc.name, input: tc.input }))
+      : null,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    latency_ms: latencyMs,
+    human_takeover: toolCalls.some(
+      (tc) => tc.name === 'update_lead_state' && tc.input.needs_human_followup === true,
+    ),
+    is_fallback: isFallback,
+    cost_usd: costUsd,
+    model_name: model,
+  };
+}
+
+// ============================================================================
+// Settings Loader (for prompt personalization)
+// ============================================================================
+
+/**
+ * Safely load account settings for a lead.
+ * Returns null on any failure — prompt builder falls back to hardcoded prompt.
+ */
+async function safeLoadSettings(leadId: string): Promise<AccountSettings | null> {
+  try {
+    return await loadSettingsForLead(leadId);
+  } catch (err) {
+    logger.warn('Failed to load account settings, using default prompt', {
+      leadId,
+      error: (err as Error).message,
+    });
+    return null;
+  }
+}
+
+// ============================================================================
 // Agentic Loop - Multi-Turn Tool Execution
 // ============================================================================
 
@@ -622,6 +742,9 @@ export interface AgentLoopResult {
 
   /** Number of API calls made */
   apiCallCount: number;
+
+  /** Raw telemetry payload for ai_telemetry table */
+  telemetry: RawTelemetryPayload;
 }
 
 /**
@@ -648,8 +771,13 @@ export async function sendMessageWithToolLoop(
   conversationHistory: ConversationMessage[],
   executeTools: ToolExecutor
 ): Promise<AgentLoopResult> {
+  const startTime = Date.now();
   const anthropic = getClient();
-  const systemPrompt = buildPromptWithContext(conversationHistory, lead);
+
+  // Load account settings for prompt personalization
+  const settings = await safeLoadSettings(lead.id);
+
+  const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
   let messages = formatMessagesForClaude(conversationHistory);
 
   if (messages.length === 0) {
@@ -709,6 +837,8 @@ export async function sendMessageWithToolLoop(
 
     // If no tool use, we're done
     if (!parsed.hasToolUse || parsed.stopReason !== 'tool_use') {
+      const latencyMs = Date.now() - startTime;
+
       logger.info('Agent loop completed', {
         leadId: lead.id,
         loops: loop + 1,
@@ -729,6 +859,11 @@ export async function sendMessageWithToolLoop(
         totalCostUsd,
         model,
         apiCallCount,
+        telemetry: buildTelemetryPayload(
+          executedToolCalls, finalContent,
+          totalInputTokens, totalOutputTokens,
+          latencyMs, totalCostUsd, model, false,
+        ),
       };
     }
 
@@ -816,9 +951,12 @@ export async function sendMessageWithToolLoop(
   });
 
   // If we still have no content, generate a fallback
+  const isFallback = !finalContent;
   if (!finalContent) {
     finalContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
   }
+
+  const latencyMs = Date.now() - startTime;
 
   return {
     content: finalContent,
@@ -831,6 +969,11 @@ export async function sendMessageWithToolLoop(
     totalCostUsd,
     model,
     apiCallCount,
+    telemetry: buildTelemetryPayload(
+      executedToolCalls, finalContent,
+      totalInputTokens, totalOutputTokens,
+      latencyMs, totalCostUsd, model, isFallback,
+    ),
   };
 }
 

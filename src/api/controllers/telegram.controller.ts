@@ -25,6 +25,15 @@ import {
   onLeadStateChange,
 } from '../../services/follow-up-decision.service.js';
 import type { Lead, UpdateLeadInput, LeadState } from '../../types/index.js';
+import { queryOne } from '../../database/connection.js';
+import { getWebSocketServer } from '../../realtime/ws-server.js';
+import {
+  emitLeadCreated,
+  emitLeadUpdated,
+  emitMessageNew,
+  emitOverviewRefresh,
+} from '../../realtime/emitter.js';
+import { logTelemetry } from '../../services/telemetry.service.js';
 
 // ============================================================================
 // Webhook Handler
@@ -158,7 +167,7 @@ async function processMessage(parsed: {
     }
 
     // Save user message
-    await MessageService.createUserMessage(lead.id, messageText, telegramMessageId);
+    const userMessage = await MessageService.createUserMessage(lead.id, messageText, telegramMessageId);
 
     // Get conversation history for Claude
     const conversationHistory = await MessageService.getConversationForClaude(lead.id, 20);
@@ -190,7 +199,7 @@ async function processMessage(parsed: {
     );
 
     // Save bot message
-    await MessageService.createBotMessage(
+    const botMessage = await MessageService.createBotMessage(
       lead.id,
       agentResult.content,
       agentResult.totalUsage.totalTokens,
@@ -209,6 +218,47 @@ async function processMessage(parsed: {
       toolCalls: agentResult.executedToolCalls.length,
       apiCalls: agentResult.apiCallCount,
       statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
+    });
+
+    // Look up active conversation (used by both realtime and telemetry)
+    const conv = await queryOne<{ id: string }>(
+      `SELECT id FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [lead.id],
+    );
+
+    // Realtime side-effects — fire and forget, after all mutations complete
+    try {
+      const wss = getWebSocketServer();
+      if (wss) {
+        if (created) {
+          emitLeadCreated(wss, lead.id);
+        }
+
+        if (conv) {
+          emitMessageNew(wss, conv.id, userMessage.id);
+          emitMessageNew(wss, conv.id, botMessage.id);
+        }
+
+        // Emit lead:updated if AI tool changed lead state
+        if (updatedLead.status !== lead.status || updatedLead.lead_state !== lead.lead_state) {
+          emitLeadUpdated(wss, lead.id);
+        }
+
+        emitOverviewRefresh(wss);
+      }
+    } catch (emitError) {
+      logger.warn('Realtime emit failed', { error: emitError, leadId: lead.id });
+    }
+
+    // Telemetry — fire and forget, never await in main path
+    void logTelemetry({
+      ...agentResult.telemetry,
+      lead_id: lead.id,
+      conversation_id: conv?.id ?? null,
+      message_id: botMessage.id,
+      prompt_version_id: null,
+    }).catch((err) => {
+      logger.warn('Telemetry write failed', { error: err, leadId: lead.id });
     });
 
   } catch (error) {

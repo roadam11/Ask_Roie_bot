@@ -109,10 +109,12 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
 // API Routes
 // ============================================================================
 
+import { attachWebSocketServer } from './realtime/ws-server.js';
 import whatsappRoutes from './api/routes/whatsapp.routes.js';
 import telegramRoutes from './api/routes/telegram.routes.js';
 import adminRoutes from './api/routes/admin.routes.js';
 import authRoutes from './api/routes/auth.routes.js';
+import crmRoutes from './api/routes/crm.routes.js';
 import dashboardRoutes from './api/routes/dashboard.routes.js';
 import analyticsRoutes from './api/routes/analytics.routes.js';
 import conversationsRoutes from './api/routes/conversations.routes.js';
@@ -131,6 +133,11 @@ app.use('/admin', adminAuth, adminRoutes);
 
 // Dashboard API routes (JWT auth)
 app.use('/api/auth', authRoutes);
+
+// CRM routes — DTO-aligned, mounted FIRST to take precedence over legacy routes
+app.use('/api', crmRoutes);
+
+// Legacy dashboard/analytics/conversations routes (kept for backwards compat)
 app.use('/api', dashboardRoutes);
 app.use('/api', analyticsRoutes);
 app.use('/api', conversationsRoutes);
@@ -191,6 +198,8 @@ async function startServer(): Promise<void> {
         env: config.server.nodeEnv,
         nodeVersion: process.version,
       });
+      // Attach WebSocket server for realtime dashboard events
+      attachWebSocketServer(server!);
     });
 
     // Handle server errors

@@ -26,6 +26,8 @@ import { buildFollowUpMessage } from '../prompts/follow-up-messages.js';
 import { markFollowUpSent } from '../services/follow-up-decision.service.js';
 import logger from '../utils/logger.js';
 import type { Lead, AutomationFollowUpType } from '../types/index.js';
+import { getWebSocketServer } from '../realtime/ws-server.js';
+import { emitLeadUpdated, emitOverviewRefresh } from '../realtime/emitter.js';
 
 // ============================================================================
 // Platform Detection
@@ -252,6 +254,17 @@ async function processLegacyFollowUp(job: Job<LegacyFollowUpJobData>): Promise<F
       messageType,
     });
 
+    // Realtime side-effect — fire and forget (no-op in separate worker process)
+    try {
+      const wss = getWebSocketServer();
+      if (wss) {
+        emitLeadUpdated(wss, leadId);
+        emitOverviewRefresh(wss);
+      }
+    } catch (emitError) {
+      logger.warn('Realtime emit failed', { error: emitError, event: 'lead:updated', leadId });
+    }
+
     return {
       success: true,
       leadId,
@@ -457,6 +470,17 @@ async function processAutomationFollowUp(
       messageType,
       platform: actualPlatform,
     });
+
+    // Realtime side-effect — fire and forget (no-op in separate worker process)
+    try {
+      const wss = getWebSocketServer();
+      if (wss) {
+        emitLeadUpdated(wss, leadId);
+        emitOverviewRefresh(wss);
+      }
+    } catch (emitError) {
+      logger.warn('Realtime emit failed', { error: emitError, event: 'lead:updated', leadId });
+    }
 
     return {
       success: true,

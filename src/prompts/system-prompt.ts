@@ -4,6 +4,7 @@
  */
 
 import type { Lead } from '../types/index.js';
+import type { AccountSettings } from '../services/settings.service.js';
 
 /**
  * Calendly booking link - MUST be included whenever suggesting to book
@@ -525,22 +526,83 @@ function formatConversationHistory(messages: ConversationMessage[]): string {
 }
 
 /**
+ * Builds the <TUTOR_PROFILE> block from account settings.
+ * Returns null if no meaningful profile data exists.
+ */
+function buildTutorProfileBlock(settings?: AccountSettings | null): string | null {
+  const profile = settings?.profile;
+  if (!profile) return null;
+
+  const lines: string[] = [];
+
+  if (profile.ownerName && profile.ownerName.trim()) {
+    lines.push(`שם המורה: ${profile.ownerName.trim()}`);
+  }
+  if (profile.companyName && profile.companyName.trim()) {
+    lines.push(`שם העסק: ${profile.companyName.trim()}`);
+  }
+  if (profile.subjects && profile.subjects.length > 0) {
+    lines.push(`תחומי לימוד: ${profile.subjects.join(', ')}`);
+  }
+  if (profile.pricing && profile.pricing.trim()) {
+    lines.push(`מחירון: ${profile.pricing.trim()}`);
+  }
+  if (profile.phone && profile.phone.trim()) {
+    lines.push(`טלפון: ${profile.phone.trim()}`);
+  }
+  if (profile.email && profile.email.trim()) {
+    lines.push(`אימייל: ${profile.email.trim()}`);
+  }
+
+  // Add tone from behavior if available
+  const tone = settings?.behavior?.tone;
+  if (tone && tone.trim()) {
+    lines.push(`טון: ${tone.trim()}`);
+  }
+
+  if (lines.length === 0) return null;
+
+  return `<TUTOR_PROFILE>\n${lines.join('\n')}\n</TUTOR_PROFILE>`;
+}
+
+/**
  * Builds the complete prompt with conversation context
  *
  * @param conversationHistory - Array of previous messages in the conversation
  * @param leadState - Current state of the lead from the database
+ * @param settings - Optional account settings for prompt personalization
  * @returns Complete system prompt with context inserted
  */
 export function buildPromptWithContext(
   conversationHistory: ConversationMessage[],
-  leadState: Partial<Lead> | null
+  leadState: Partial<Lead> | null,
+  settings?: AccountSettings | null
 ): string {
   const formattedLeadState = formatLeadState(leadState);
   const formattedHistory = formatConversationHistory(conversationHistory);
 
-  return SYSTEM_PROMPT
+  // Base prompt selection: custom prompt if valid, otherwise hardcoded fallback
+  const hasCustomPrompt =
+    settings?.behavior?.systemPrompt != null &&
+    typeof settings.behavior.systemPrompt === 'string' &&
+    settings.behavior.systemPrompt.trim().length > 0;
+
+  const basePrompt = hasCustomPrompt
+    ? settings!.behavior!.systemPrompt!
+    : SYSTEM_PROMPT;
+
+  // Replace standard placeholders (work in both custom and hardcoded prompts)
+  let prompt = basePrompt
     .replace('{{LEAD_STATE}}', formattedLeadState)
     .replace('{{CONVERSATION_HISTORY}}', formattedHistory);
+
+  // Append <TUTOR_PROFILE> block when profile data exists
+  const tutorProfileBlock = buildTutorProfileBlock(settings);
+  if (tutorProfileBlock) {
+    prompt += '\n\n' + tutorProfileBlock;
+  }
+
+  return prompt;
 }
 
 /**
