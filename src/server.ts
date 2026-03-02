@@ -7,6 +7,7 @@
  * Handles WhatsApp webhooks, admin endpoints, and health checks.
  */
 
+import { IncomingMessage, ServerResponse } from 'node:http';
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -46,9 +47,13 @@ app.use(helmet({
 // ============================================================================
 
 // JSON body parser with size limit
+// The verify callback captures the raw body buffer for webhook signature verification (HMAC-SHA256)
 app.use(express.json({
   limit: '1mb',
   strict: true,
+  verify: (req: IncomingMessage, _res: ServerResponse, buf: Buffer) => {
+    (req as unknown as Request).rawBody = buf;
+  },
 }));
 
 // URL-encoded body parser (for form data)

@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/error-handler.js';
+import { verifyWebhookSignature } from '../middleware/webhook-signature.js';
 import {
   verifyWebhook,
   handleIncomingMessage,
@@ -55,7 +56,7 @@ router.get('/', verifyWebhook);
  *
  * @returns { status: 'received' }
  */
-router.post('/', asyncHandler(handleIncomingMessage));
+router.post('/', verifyWebhookSignature, asyncHandler(handleIncomingMessage));
 
 // ============================================================================
 // Exports

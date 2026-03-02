@@ -52,6 +52,9 @@ const envSchema = z.object({
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z
     .string()
     .default(''),
+  WHATSAPP_APP_SECRET: z
+    .string()
+    .default(''),
 
   // Claude API
   ANTHROPIC_API_KEY: z
@@ -196,6 +199,8 @@ interface WhatsAppConfig {
   accessToken: string;
   /** Webhook verification token */
   webhookVerifyToken: string;
+  /** Meta App Secret for webhook signature verification */
+  appSecret: string;
   /** WhatsApp API base URL */
   apiBaseUrl: string;
 }
@@ -309,6 +314,7 @@ const config: Config = {
     businessAccountId: env.WHATSAPP_BUSINESS_ACCOUNT_ID,
     accessToken: env.WHATSAPP_ACCESS_TOKEN,
     webhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    appSecret: env.WHATSAPP_APP_SECRET,
     apiBaseUrl: 'https://graph.facebook.com/v18.0',
   },
 
