@@ -75,6 +75,16 @@ const envSchema = z.object({
     .string()
     .default(''),
 
+  // JWT Secrets
+  JWT_SECRET: z
+    .string()
+    .min(32, 'JWT_SECRET must be at least 32 characters')
+    .default('dev-jwt-secret-do-not-use-in-production-1234'),
+  JWT_REFRESH_SECRET: z
+    .string()
+    .min(32, 'JWT_REFRESH_SECRET must be at least 32 characters')
+    .default('dev-jwt-refresh-secret-do-not-use-in-prod-1234'),
+
   // Admin
   ADMIN_USERNAME: z
     .string()
@@ -115,6 +125,30 @@ function parseEnv() {
 }
 
 const env = parseEnv();
+
+// ============================================================================
+// Production JWT Secret Enforcement
+// ============================================================================
+
+if (env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET) {
+    throw new Error(
+      '\n❌ SECURITY: JWT_SECRET environment variable is REQUIRED in production.\n' +
+      'Set a cryptographically random string of at least 32 characters.\n'
+    );
+  }
+  if (!process.env.JWT_REFRESH_SECRET) {
+    throw new Error(
+      '\n❌ SECURITY: JWT_REFRESH_SECRET environment variable is REQUIRED in production.\n' +
+      'Set a cryptographically random string of at least 32 characters (different from JWT_SECRET).\n'
+    );
+  }
+} else if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+  // Development mode with defaults — log warning
+  console.warn(
+    '⚠️  JWT secrets not set — using insecure dev defaults. Do NOT use in production.'
+  );
+}
 
 // ============================================================================
 // Configuration Object
@@ -203,6 +237,16 @@ interface TelegramConfig {
 }
 
 /**
+ * JWT authentication configuration
+ */
+interface JwtConfig {
+  /** Secret for signing access tokens */
+  secret: string;
+  /** Secret for signing refresh tokens */
+  refreshSecret: string;
+}
+
+/**
  * Admin dashboard configuration
  */
 interface AdminConfig {
@@ -231,6 +275,7 @@ interface Config {
   telegram: TelegramConfig;
   anthropic: AnthropicConfig;
   calendly: CalendlyConfig;
+  jwt: JwtConfig;
   admin: AdminConfig;
   logging: LoggingConfig;
 }
@@ -285,6 +330,11 @@ const config: Config = {
     apiBaseUrl: 'https://api.calendly.com',
   },
 
+  jwt: {
+    secret: env.JWT_SECRET,
+    refreshSecret: env.JWT_REFRESH_SECRET,
+  },
+
   admin: {
     username: env.ADMIN_USERNAME,
     password: env.ADMIN_PASSWORD,
@@ -310,6 +360,7 @@ export type {
   TelegramConfig,
   AnthropicConfig,
   CalendlyConfig,
+  JwtConfig,
   AdminConfig,
   LoggingConfig,
 };

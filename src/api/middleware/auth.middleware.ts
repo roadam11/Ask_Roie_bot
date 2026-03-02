@@ -13,6 +13,7 @@
 
 import { Request, Response, NextFunction, CookieOptions } from 'express';
 import jwt, { SignOptions, JwtPayload } from 'jsonwebtoken';
+import config from '../../config/index.js';
 import logger from '../../utils/logger.js';
 
 // ============================================================================
@@ -42,21 +43,17 @@ interface TokenPayload extends JwtPayload {
 // Configuration
 // ============================================================================
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET + '-refresh';
-
 // Token expiry times
 const ACCESS_TOKEN_EXPIRY = 15 * 60; // 15 minutes in seconds
 const REFRESH_TOKEN_EXPIRY = 30 * 24 * 60 * 60; // 30 days in seconds
 
 // Cookie configuration
 const REFRESH_TOKEN_COOKIE_NAME = 'refreshToken';
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const COOKIE_OPTIONS: CookieOptions = {
   httpOnly: true, // Prevents JavaScript access (XSS protection)
-  secure: IS_PRODUCTION, // HTTPS only in production
-  sameSite: IS_PRODUCTION ? 'strict' : 'lax', // CSRF protection
+  secure: config.server.isProduction, // HTTPS only in production
+  sameSite: config.server.isProduction ? 'strict' : 'lax', // CSRF protection
   path: '/api/auth', // Only sent to auth endpoints
   maxAge: REFRESH_TOKEN_EXPIRY * 1000, // Convert to milliseconds
 };
@@ -79,7 +76,7 @@ export function generateAccessToken(user: AuthUser): string {
   };
 
   const options: SignOptions = { expiresIn: ACCESS_TOKEN_EXPIRY };
-  return jwt.sign(payload, JWT_SECRET, options);
+  return jwt.sign(payload, config.jwt.secret, options);
 }
 
 /**
@@ -96,7 +93,7 @@ export function generateRefreshToken(user: AuthUser): string {
   };
 
   const options: SignOptions = { expiresIn: REFRESH_TOKEN_EXPIRY };
-  return jwt.sign(payload, JWT_REFRESH_SECRET, options);
+  return jwt.sign(payload, config.jwt.refreshSecret, options);
 }
 
 /**
@@ -151,7 +148,7 @@ export function getRefreshTokenFromCookie(req: Request): string | null {
  */
 export function verifyAccessToken(token: string): AuthUser | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    const decoded = jwt.verify(token, config.jwt.secret) as TokenPayload;
 
     if (decoded.type !== 'access') {
       logger.warn('Token type mismatch - expected access token');
@@ -174,7 +171,7 @@ export function verifyAccessToken(token: string): AuthUser | null {
  */
 export function verifyRefreshToken(token: string): AuthUser | null {
   try {
-    const decoded = jwt.verify(token, JWT_REFRESH_SECRET) as TokenPayload;
+    const decoded = jwt.verify(token, config.jwt.refreshSecret) as TokenPayload;
 
     if (decoded.type !== 'refresh') {
       logger.warn('Token type mismatch - expected refresh token');
@@ -327,7 +324,7 @@ export function generateToken(user: AuthUser, expiresInSeconds: number = ACCESS_
       role: user.role,
       type: 'access',
     },
-    JWT_SECRET,
+    config.jwt.secret,
     options
   );
 }
