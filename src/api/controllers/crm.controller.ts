@@ -263,12 +263,6 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
      WHERE l.id = $${pi} AND l.agent_id = a.id AND ($${pi + 1}::uuid IS NULL OR a.account_id = $${pi + 1})
      RETURNING l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id`,
     params,
-  ).catch(() =>
-    // Fallback for leads with no agent_id
-    queryOne<Record<string, unknown>>(
-      `UPDATE leads SET ${sets.join(', ')} WHERE id = $${pi} RETURNING *`,
-      [...params.slice(0, pi - 1), id],
-    ),
   );
 
   if (!row) { res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' }); return; }
@@ -300,8 +294,6 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
      WHERE l.id = $1 AND l.agent_id = a.id AND ($2::uuid IS NULL OR a.account_id = $2)
      RETURNING l.id`,
     [id, aid],
-  ).catch(() =>
-    queryOne<{ id: string }>(`DELETE FROM leads WHERE id = $1 RETURNING id`, [id]),
   );
 
   if (!result) { res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' }); return; }
@@ -382,9 +374,13 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
   const { id } = req.params;
   if (!isValidUUID(id)) { res.status(400).json({ code: 'INVALID_ID', message: 'Invalid conversation ID' }); return; }
 
+  const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
-    `SELECT lead_id FROM conversations WHERE id = $1`,
-    [id],
+    `SELECT c.lead_id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
+    [id, aid],
   );
   if (!conv) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
 
@@ -412,9 +408,13 @@ export async function getMessagesCursor(req: AuthenticatedRequest, res: Response
   const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
   const cursor = req.query.cursor as string | undefined;
 
+  const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
-    `SELECT lead_id FROM conversations WHERE id = $1`,
-    [id],
+    `SELECT c.lead_id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
+    [id, aid],
   );
   if (!conv) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
 
@@ -470,9 +470,13 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
     res.status(400).json({ code: 'MISSING_TEXT', message: 'text is required' }); return;
   }
 
+  const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
-    `SELECT lead_id FROM conversations WHERE id = $1`,
-    [id],
+    `SELECT c.lead_id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
+    [id, aid],
   );
   if (!conv) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
 
@@ -530,7 +534,10 @@ export async function updateConversationStatus(req: AuthenticatedRequest, res: R
     [dbStatus, id, aid],
   );
 
-  const row = await queryOne<Record<string, unknown>>(`${CONV_SELECT} WHERE c.id = $1`, [id]);
+  const row = await queryOne<Record<string, unknown>>(
+    `${CONV_SELECT} WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
+    [id, aid],
+  );
   if (!row) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
   res.json(toConversationDTO(row));
 

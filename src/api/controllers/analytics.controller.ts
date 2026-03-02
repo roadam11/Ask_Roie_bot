@@ -88,11 +88,15 @@ export async function getFunnelAnalysis(req: AuthenticatedRequest, res: Response
 
 export async function getBottlenecks(req: AuthenticatedRequest, res: Response) {
   const { threshold = '70' } = req.query;
+  const accountId = req.user?.accountId;
   // Reuse funnel and filter
   const bottleneckResult = await query(`
-    SELECT status, COUNT(*) as cnt FROM leads
-    WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY status
-  `);
+    SELECT l.status, COUNT(*) as cnt FROM leads l
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE l.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+    GROUP BY l.status
+  `, [accountId || null]);
   const stages = bottleneckResult.rows;
   const order = ['new', 'qualified', 'considering', 'hesitant', 'ready_to_book'];
   const sorted = order.map(s => stages.find((st: Record<string, unknown>) => st.status === s) || { status: s, cnt: 0 });
@@ -119,10 +123,14 @@ export async function getAIPerformance(req: AuthenticatedRequest, res: Response)
   `, [dateFrom || null, dateTo || null, accountId || null]);
 
   const intentsResult = await query(`
-    SELECT detected_intent, COUNT(*) as cnt, ROUND(AVG(intent_confidence) * 100, 1) as conf
-    FROM ai_telemetry WHERE detected_intent IS NOT NULL AND created_at > NOW() - INTERVAL '30 days'
-    GROUP BY detected_intent ORDER BY cnt DESC LIMIT 10
-  `);
+    SELECT t.detected_intent, COUNT(*) as cnt, ROUND(AVG(t.intent_confidence) * 100, 1) as conf
+    FROM ai_telemetry t
+    JOIN leads l ON t.lead_id = l.id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE t.detected_intent IS NOT NULL AND t.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+    GROUP BY t.detected_intent ORDER BY cnt DESC LIMIT 10
+  `, [accountId || null]);
   const intents = intentsResult.rows;
 
   res.json({
@@ -136,26 +144,32 @@ export async function getAIPerformance(req: AuthenticatedRequest, res: Response)
   });
 }
 
-export async function getConfidenceAnalysis(_req: AuthenticatedRequest, res: Response) {
+export async function getConfidenceAnalysis(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const confResult = await query(`
-    SELECT FLOOR(intent_confidence * 10) / 10 as bucket, COUNT(*) as cnt,
+    SELECT FLOOR(t.intent_confidence * 10) / 10 as bucket, COUNT(*) as cnt,
            COUNT(*) FILTER (WHERE l.status = 'booked') as booked
     FROM ai_telemetry t JOIN leads l ON l.id = t.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
     WHERE t.intent_confidence IS NOT NULL AND t.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY 1 ORDER BY 1
-  `);
+  `, [accountId || null]);
   const data = confResult.rows;
   res.json({ distribution: data.map((d: Record<string, unknown>) => ({ bucket: Number(d.bucket), count: Number(d.cnt), booked: Number(d.booked) })) });
 }
 
-export async function getAIHumanComparison(_req: AuthenticatedRequest, res: Response) {
+export async function getAIHumanComparison(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const compResult = await query(`
     SELECT CASE WHEN BOOL_OR(t.human_takeover) THEN 'human' ELSE 'ai' END as type,
            COUNT(DISTINCT l.id) as leads, COUNT(DISTINCT l.id) FILTER (WHERE l.status = 'booked') as booked
     FROM leads l LEFT JOIN ai_telemetry t ON t.lead_id = l.id
+    LEFT JOIN agents a ON l.agent_id = a.id
     WHERE l.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY CASE WHEN BOOL_OR(t.human_takeover) THEN 'human' ELSE 'ai' END
-  `);
+  `, [accountId || null]);
   const data = compResult.rows;
   const ai = data.find((d: Record<string, unknown>) => d.type === 'ai') || { leads: 0, booked: 0 };
   const human = data.find((d: Record<string, unknown>) => d.type === 'human') || { leads: 0, booked: 0 };
@@ -173,9 +187,11 @@ export async function getRevenueIntelligence(req: AuthenticatedRequest, res: Res
   `, [accountId || null]);
 
   const leadsResult = await query(`
-    SELECT id, status, lead_state, lead_value, created_at FROM leads
-    WHERE status NOT IN ('booked', 'lost')
-  `);
+    SELECT l.id, l.status, l.lead_state, l.lead_value, l.created_at FROM leads l
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE l.status NOT IN ('booked', 'lost')
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+  `, [accountId || null]);
   const activeLeads = leadsResult.rows;
   const expected = calculateExpectedRevenue(activeLeads as any[]);
   const velocity = await calculatePipelineVelocity(accountId || null);
@@ -188,13 +204,17 @@ export async function getRevenueIntelligence(req: AuthenticatedRequest, res: Res
   });
 }
 
-export async function getRevenueCohorts(_req: AuthenticatedRequest, res: Response) {
+export async function getRevenueCohorts(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const cohortsResult = await query(`
-    SELECT DATE_TRUNC('month', created_at)::DATE as cohort, COUNT(*) as leads,
-           SUM(lead_value) FILTER (WHERE status = 'booked') as revenue
-    FROM leads WHERE created_at > NOW() - INTERVAL '12 months'
+    SELECT DATE_TRUNC('month', l.created_at)::DATE as cohort, COUNT(*) as leads,
+           SUM(l.lead_value) FILTER (WHERE l.status = 'booked') as revenue
+    FROM leads l
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE l.created_at > NOW() - INTERVAL '12 months'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY 1 ORDER BY 1
-  `);
+  `, [accountId || null]);
   const data = cohortsResult.rows;
   res.json({ cohorts: data.map((d: Record<string, unknown>) => ({ cohort: d.cohort, leads: Number(d.leads), revenue: Number(d.revenue) || 0 })) });
 }

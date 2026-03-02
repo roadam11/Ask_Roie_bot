@@ -56,11 +56,14 @@ export async function searchConversations(req: AuthenticatedRequest, res: Respon
 
 export async function getRecentConversations(req: AuthenticatedRequest, res: Response) {
   const { limit = '10' } = req.query;
+  const accountId = req.user?.accountId;
   const result = await query(`
     SELECT c.id, c.lead_id, l.name, l.phone, c.outcome, c.started_at, c.message_count
     FROM conversations c JOIN leads l ON l.id = c.lead_id
-    ORDER BY c.started_at DESC LIMIT $1
-  `, [Math.min(50, Number(limit))]);
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE ($1::UUID IS NULL OR a.account_id = $1)
+    ORDER BY c.started_at DESC LIMIT $2
+  `, [accountId || null, Math.min(50, Number(limit))]);
   const data = result.rows;
 
   return res.json({ data: data.map((c: Record<string, unknown>) => ({ id: c.id, leadId: c.lead_id, name: c.name, phone: c.phone, outcome: c.outcome, startedAt: c.started_at })) });
@@ -68,17 +71,20 @@ export async function getRecentConversations(req: AuthenticatedRequest, res: Res
 
 export async function getConversationById(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
+  const accountId = req.user?.accountId;
 
   const conv = await queryOne(`
     SELECT c.*, l.name, l.phone, l.status as lead_status, l.subject
-    FROM conversations c JOIN leads l ON l.id = c.lead_id WHERE c.id = $1
-  `, [id]);
+    FROM conversations c JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)
+  `, [id, accountId || null]);
 
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
   const messagesResult = await query(`SELECT * FROM messages WHERE lead_id = $1 ORDER BY created_at`, [conv.lead_id]);
   const messages = messagesResult.rows;
-  
+
   const telemetryResult = await query(`SELECT * FROM ai_telemetry WHERE conversation_id = $1 ORDER BY created_at`, [id]);
   const telemetry = telemetryResult.rows;
 
@@ -92,13 +98,25 @@ export async function getConversationById(req: AuthenticatedRequest, res: Respon
 
 export async function getConversationTimeline(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
+  const accountId = req.user?.accountId;
+
+  // Verify conversation belongs to this tenant
+  const conv = await queryOne<{ lead_id: string }>(
+    `SELECT c.lead_id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
+    [id, accountId || null],
+  );
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+
   const result = await query(`
     SELECT m.created_at as ts, m.direction, m.content, t.detected_intent, t.intent_confidence
     FROM messages m
     LEFT JOIN ai_telemetry t ON t.message_id = m.id
-    WHERE m.lead_id = (SELECT lead_id FROM conversations WHERE id = $1)
+    WHERE m.lead_id = $1
     ORDER BY m.created_at
-  `, [id]);
+  `, [conv.lead_id]);
   const events = result.rows;
 
   return res.json({ events: events.map((e: Record<string, unknown>) => ({ timestamp: e.ts, direction: e.direction, content: (e.content as string)?.substring(0, 100), intent: e.detected_intent })) });
@@ -106,12 +124,24 @@ export async function getConversationTimeline(req: AuthenticatedRequest, res: Re
 
 export async function getDecisionPath(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
+  const accountId = req.user?.accountId;
+
+  // Verify conversation belongs to this tenant
+  const conv = await queryOne<{ id: string }>(
+    `SELECT c.id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
+    [id, accountId || null],
+  );
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+
   const result = await query(`
     SELECT decision_path, entities_extracted, tool_calls, reasoning
     FROM ai_telemetry WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 5
   `, [id]);
   const data = result.rows;
-  
+
   return res.json({ paths: data });
 }
 
@@ -120,8 +150,19 @@ export async function flagConversation(req: AuthenticatedRequest, res: Response)
   const { id } = req.params;
   const { flagType, severity = 'medium', reason } = req.body;
   const userId = req.user?.id;
+  const accountId = req.user?.accountId;
 
   if (!flagType || !reason) return res.status(400).json({ error: 'flagType and reason required' });
+
+  // Verify conversation belongs to this tenant
+  const conv = await queryOne<{ id: string }>(
+    `SELECT c.id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
+    [id, accountId || null],
+  );
+  if (!conv) return res.status(404).json({ error: 'Not found' });
 
   const flag = await queryOne(`
     INSERT INTO qa_flags (conversation_id, flag_type, severity, reason, flagged_by)
@@ -133,24 +174,48 @@ export async function flagConversation(req: AuthenticatedRequest, res: Response)
 
 export async function getConversationFlags(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
+  const accountId = req.user?.accountId;
+
+  // Verify conversation belongs to this tenant
+  const conv = await queryOne<{ id: string }>(
+    `SELECT c.id FROM conversations c
+     JOIN leads l ON c.lead_id = l.id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
+    [id, accountId || null],
+  );
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+
   const result = await query(`SELECT * FROM qa_flags WHERE conversation_id = $1 ORDER BY created_at DESC`, [id]);
   const flags = result.rows;
-  
+
   return res.json({ flags });
 }
 
 // QA Dashboard
-export async function getQAMetrics(_req: AuthenticatedRequest, res: Response) {
+export async function getQAMetrics(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
+
   const summary = await queryOne(`
-    SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'open') as open_count,
-           COUNT(*) FILTER (WHERE status = 'resolved') as resolved
-    FROM qa_flags WHERE created_at > NOW() - INTERVAL '30 days'
-  `);
+    SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE qf.status = 'open') as open_count,
+           COUNT(*) FILTER (WHERE qf.status = 'resolved') as resolved
+    FROM qa_flags qf
+    JOIN conversations c ON c.id = qf.conversation_id
+    JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE qf.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+  `, [accountId || null]);
 
   const result = await query(`
-    SELECT flag_type, COUNT(*) as cnt FROM qa_flags
-    WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY flag_type ORDER BY cnt DESC
-  `);
+    SELECT qf.flag_type, COUNT(*) as cnt FROM qa_flags qf
+    JOIN conversations c ON c.id = qf.conversation_id
+    JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE qf.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+    GROUP BY qf.flag_type ORDER BY cnt DESC
+  `, [accountId || null]);
   const byType = result.rows;
 
   return res.json({
@@ -161,26 +226,35 @@ export async function getQAMetrics(_req: AuthenticatedRequest, res: Response) {
 
 export async function getQAFlags(req: AuthenticatedRequest, res: Response) {
   const { status, severity, page = '1', limit = '20' } = req.query;
+  const accountId = req.user?.accountId;
   const pageNum = Math.max(1, Number(page));
   const limitNum = Math.min(100, Number(limit));
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  let idx = 1;
+  const conditions: string[] = ['($1::UUID IS NULL OR a.account_id = $1)'];
+  const params: unknown[] = [accountId || null];
+  let idx = 2;
 
-  if (status) { conditions.push(`status = $${idx++}`); params.push(status); }
-  if (severity) { conditions.push(`severity = $${idx++}`); params.push(severity); }
+  if (status) { conditions.push(`qf.status = $${idx++}`); params.push(status); }
+  if (severity) { conditions.push(`qf.severity = $${idx++}`); params.push(severity); }
 
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const where = `WHERE ${conditions.join(' AND ')}`;
 
-  const countResult = await queryOne<{ total: string }>(`SELECT COUNT(*) as total FROM qa_flags ${where}`, params);
+  const countResult = await queryOne<{ total: string }>(
+    `SELECT COUNT(*) as total FROM qa_flags qf
+     JOIN conversations c ON c.id = qf.conversation_id
+     JOIN leads l ON l.id = c.lead_id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     ${where}`,
+    params,
+  );
   const total = Number(countResult?.total) || 0;
 
   params.push(limitNum, (pageNum - 1) * limitNum);
   const result = await query(`
     SELECT qf.*, l.name as lead_name FROM qa_flags qf
-    LEFT JOIN conversations c ON c.id = qf.conversation_id
-    LEFT JOIN leads l ON l.id = c.lead_id
+    JOIN conversations c ON c.id = qf.conversation_id
+    JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
     ${where} ORDER BY qf.created_at DESC LIMIT $${idx++} OFFSET $${idx}
   `, params);
   const flags = result.rows;
@@ -192,6 +266,18 @@ export async function updateQAFlag(req: AuthenticatedRequest, res: Response) {
   const { flagId } = req.params;
   const { status, resolutionNotes } = req.body;
   const userId = req.user?.id;
+  const accountId = req.user?.accountId;
+
+  // Verify flag belongs to a conversation in this tenant
+  const existing = await queryOne<{ id: string }>(
+    `SELECT qf.id FROM qa_flags qf
+     JOIN conversations c ON c.id = qf.conversation_id
+     JOIN leads l ON l.id = c.lead_id
+     LEFT JOIN agents a ON l.agent_id = a.id
+     WHERE qf.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
+    [flagId, accountId || null],
+  );
+  if (!existing) return res.status(404).json({ error: 'Flag not found' });
 
   const flag = await queryOne(`
     UPDATE qa_flags SET status = COALESCE($1, status), resolution_notes = COALESCE($2, resolution_notes),
@@ -204,33 +290,48 @@ export async function updateQAFlag(req: AuthenticatedRequest, res: Response) {
   return res.json({ success: true, flag });
 }
 
-export async function getFailurePatterns(_req: AuthenticatedRequest, res: Response) {
+export async function getFailurePatterns(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const result = await query(`
-    SELECT flag_type, COUNT(*) as cnt FROM qa_flags
-    WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY flag_type ORDER BY cnt DESC LIMIT 10
-  `);
+    SELECT qf.flag_type, COUNT(*) as cnt FROM qa_flags qf
+    JOIN conversations c ON c.id = qf.conversation_id
+    JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE qf.created_at > NOW() - INTERVAL '30 days'
+      AND ($1::UUID IS NULL OR a.account_id = $1)
+    GROUP BY qf.flag_type ORDER BY cnt DESC LIMIT 10
+  `, [accountId || null]);
   const patterns = result.rows;
-  
+
   return res.json({ patterns: patterns.map((p: Record<string, unknown>) => ({ type: p.flag_type, count: Number(p.cnt) })) });
 }
 
-export async function getABTestResults(_req: AuthenticatedRequest, res: Response) {
+export async function getABTestResults(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const result = await query(`
     SELECT pv.*, COUNT(DISTINCT t.conversation_id) as conversations, AVG(t.intent_confidence) as avg_conf
-    FROM prompt_versions pv LEFT JOIN ai_telemetry t ON t.prompt_version_id = pv.id
+    FROM prompt_versions pv
+    LEFT JOIN ai_telemetry t ON t.prompt_version_id = pv.id
+    LEFT JOIN leads l ON t.lead_id = l.id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE ($1::UUID IS NULL OR a.account_id = $1 OR t.id IS NULL)
     GROUP BY pv.id ORDER BY pv.version_number DESC LIMIT 10
-  `);
+  `, [accountId || null]);
   const tests = result.rows;
-  
+
   return res.json({ tests: tests.map((t: Record<string, unknown>) => ({ id: t.id, name: t.version_name, active: t.active, conversations: Number(t.conversations), avgConfidence: Number(t.avg_conf) })) });
 }
 
-export async function exportConversations(_req: AuthenticatedRequest, res: Response) {
+export async function exportConversations(req: AuthenticatedRequest, res: Response) {
+  const accountId = req.user?.accountId;
   const result = await query(`
     SELECT c.id, l.name, c.outcome, c.started_at FROM conversations c
-    JOIN leads l ON l.id = c.lead_id ORDER BY c.started_at DESC LIMIT 100
-  `);
+    JOIN leads l ON l.id = c.lead_id
+    LEFT JOIN agents a ON l.agent_id = a.id
+    WHERE ($1::UUID IS NULL OR a.account_id = $1)
+    ORDER BY c.started_at DESC LIMIT 100
+  `, [accountId || null]);
   const conversations = result.rows;
-  
+
   return res.json({ count: conversations.length, data: conversations });
 }

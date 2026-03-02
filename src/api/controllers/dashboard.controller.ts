@@ -671,10 +671,10 @@ export async function replyToLead(
     // Save message to database
     await MessageService.createBotMessage(lead.id, message.trim(), 0, 'manual');
 
-    // Mark as human contacted (blocks automation for 48h)
+    // Mark as human contacted (blocks automation for 48h) — use lead.id from tenant-verified query
     await query(
       `UPDATE leads SET human_contacted_at = NOW(), updated_at = NOW() WHERE id = $1`,
-      [id]
+      [lead.id]
     );
 
     logger.info('Manual reply sent via dashboard', {

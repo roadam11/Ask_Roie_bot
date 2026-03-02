@@ -59,7 +59,8 @@ export async function getAlertsSummary(req: AuthenticatedRequest, res: Response)
 
 export async function getAlertById(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
-  const alert = await queryOne(`SELECT * FROM alerts WHERE id = $1`, [id]);
+  const accountId = req.user?.accountId;
+  const alert = await queryOne(`SELECT * FROM alerts WHERE id = $1 AND ($2::UUID IS NULL OR account_id = $2)`, [id, accountId || null]);
   if (!alert) return res.status(404).json({ error: 'Not found' });
   return res.json({ alert });
 }
@@ -67,11 +68,12 @@ export async function getAlertById(req: AuthenticatedRequest, res: Response) {
 export async function acknowledgeAlert(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
   const userId = req.user?.id;
+  const accountId = req.user?.accountId;
 
   const alert = await queryOne(`
     UPDATE alerts SET status = 'acknowledged', acknowledged_by = $1, acknowledged_at = NOW()
-    WHERE id = $2 AND status = 'active' RETURNING *
-  `, [userId, id]);
+    WHERE id = $2 AND status = 'active' AND ($3::UUID IS NULL OR account_id = $3) RETURNING *
+  `, [userId, id, accountId || null]);
 
   if (!alert) return res.status(404).json({ error: 'Not found or already acknowledged' });
   return res.json({ success: true, alert });
@@ -79,11 +81,12 @@ export async function acknowledgeAlert(req: AuthenticatedRequest, res: Response)
 
 export async function resolveAlert(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
+  const accountId = req.user?.accountId;
 
   const alert = await queryOne(`
     UPDATE alerts SET status = 'resolved', resolved_at = NOW()
-    WHERE id = $1 AND status IN ('active', 'acknowledged') RETURNING *
-  `, [id]);
+    WHERE id = $1 AND status IN ('active', 'acknowledged') AND ($2::UUID IS NULL OR account_id = $2) RETURNING *
+  `, [id, accountId || null]);
 
   if (!alert) return res.status(404).json({ error: 'Not found' });
   return res.json({ success: true, alert });
@@ -92,11 +95,12 @@ export async function resolveAlert(req: AuthenticatedRequest, res: Response) {
 export async function snoozeAlert(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
   const { hours = 4 } = req.body;
+  const accountId = req.user?.accountId;
 
   const alert = await queryOne(`
     UPDATE alerts SET expires_at = NOW() + ($1 || ' hours')::INTERVAL, status = 'acknowledged'
-    WHERE id = $2 RETURNING *
-  `, [Math.min(168, Number(hours)), id]);
+    WHERE id = $2 AND ($3::UUID IS NULL OR account_id = $3) RETURNING *
+  `, [Math.min(168, Number(hours)), id, accountId || null]);
 
   if (!alert) return res.status(404).json({ error: 'Not found' });
   return res.json({ success: true, alert });
