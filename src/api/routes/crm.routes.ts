@@ -38,7 +38,8 @@ router.patch('/conversations/:id/status',  writeRateLimiter, CRM.updateConversat
 
 // ── Analytics ──────────────────────────────────────────────────────────────────
 
-router.get('/analytics/overview', CRM.getOverview);
+router.get('/analytics/overview',   CRM.getOverview);
+router.get('/analytics/dashboard', CRM.getAnalyticsDashboard);
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 

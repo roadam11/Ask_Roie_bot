@@ -663,6 +663,192 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
   res.json({ revenue, funnel, aiPerformance, activity });
 }
 
+/**
+ * GET /api/analytics/dashboard
+ * Returns AnalyticsDashboardDTO — detailed analytics for the analytics page.
+ * Query params: ?period=7d|30d|90d (default 7d)
+ */
+export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const aid = accountId(req);
+
+  const periodParam = (req.query.period as string) ?? '7d';
+  const periodDays = periodParam === '90d' ? 90 : periodParam === '30d' ? 30 : 7;
+  const interval = `${periodDays} days`;
+
+  const [
+    statsRes,
+    aiPerfRes,
+    funnelRes,
+    activityRes,
+    intentRes,
+    channelRes,
+  ] = await Promise.all([
+    // 1. Stats: total leads, active conversations, messages in period, AI responses in period
+    queryOne<{
+      total_leads: string;
+      active_conversations: string;
+      messages_count: string;
+      ai_responses: string;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM leads l LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE ($1::uuid IS NULL OR a.account_id = $1)) AS total_leads,
+         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE c.status = 'active'
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS active_conversations,
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE m.created_at > NOW() - $2::interval
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS messages_count,
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE m.role = 'bot'
+            AND m.created_at > NOW() - $2::interval
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS ai_responses`,
+      [aid, interval],
+    ),
+
+    // 2. AI performance: avg latency, avg tokens, total cost, fallback rate
+    queryOne<{
+      avg_latency: string;
+      avg_tokens: string;
+      total_cost: string;
+      total_telemetry: string;
+      fallback_count: string;
+    }>(
+      `SELECT
+         COALESCE(AVG(t.latency_ms), 0) AS avg_latency,
+         COALESCE(AVG(t.total_tokens), 0) AS avg_tokens,
+         COALESCE(SUM(t.cost_usd), 0) AS total_cost,
+         COUNT(*) AS total_telemetry,
+         COUNT(*) FILTER (WHERE COALESCE(t.is_fallback, false)) AS fallback_count
+       FROM ai_telemetry t
+       JOIN leads l ON t.lead_id = l.id
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE t.created_at > NOW() - $2::interval
+         AND ($1::uuid IS NULL OR a.account_id = $1)`,
+      [aid, interval],
+    ),
+
+    // 3. Lead funnel: count by status
+    query<{ status: string; count: string }>(
+      `SELECT l.status, COUNT(*) AS count
+       FROM leads l
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY l.status
+       ORDER BY CASE l.status
+         WHEN 'new' THEN 1
+         WHEN 'qualified' THEN 2
+         WHEN 'considering' THEN 3
+         WHEN 'hesitant' THEN 4
+         WHEN 'ready_to_book' THEN 5
+         WHEN 'booked' THEN 6
+         WHEN 'lost' THEN 7
+         ELSE 8
+       END`,
+      [aid],
+    ),
+
+    // 4. Messages per day over period
+    query<{ date: string; count: string }>(
+      `SELECT DATE(m.created_at) AS date, COUNT(*) AS count
+       FROM messages m
+       JOIN leads l ON m.lead_id = l.id
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE m.created_at > NOW() - $2::interval
+         AND ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY DATE(m.created_at)
+       ORDER BY date`,
+      [aid, interval],
+    ),
+
+    // 5. Intent distribution
+    query<{ intent: string; count: string }>(
+      `SELECT COALESCE(t.detected_intent, 'unknown') AS intent, COUNT(*) AS count
+       FROM ai_telemetry t
+       JOIN leads l ON t.lead_id = l.id
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE t.created_at > NOW() - $2::interval
+         AND ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY t.detected_intent
+       ORDER BY count DESC`,
+      [aid, interval],
+    ),
+
+    // 6. Channel distribution
+    query<{ channel: string; count: string }>(
+      `SELECT COALESCE(c.channel, 'whatsapp') AS channel, COUNT(*) AS count
+       FROM conversations c
+       JOIN leads l ON c.lead_id = l.id
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY c.channel`,
+      [aid],
+    ),
+  ]);
+
+  // Build stats
+  const stats = {
+    totalLeads:           parseInt(statsRes?.total_leads ?? '0', 10),
+    activeConversations:  parseInt(statsRes?.active_conversations ?? '0', 10),
+    messagesInPeriod:     parseInt(statsRes?.messages_count ?? '0', 10),
+    aiResponsesInPeriod:  parseInt(statsRes?.ai_responses ?? '0', 10),
+  };
+
+  // Build AI performance
+  const totalTelemetry = parseInt(aiPerfRes?.total_telemetry ?? '0', 10);
+  const fallbackCount  = parseInt(aiPerfRes?.fallback_count ?? '0', 10);
+  const aiPerformance = {
+    avgLatencyMs:    Math.round(parseFloat(aiPerfRes?.avg_latency ?? '0')),
+    avgTokens:       Math.round(parseFloat(aiPerfRes?.avg_tokens ?? '0')),
+    totalCostUsd:    parseFloat(parseFloat(aiPerfRes?.total_cost ?? '0').toFixed(4)),
+    fallbackRate:    totalTelemetry > 0 ? parseFloat((fallbackCount / totalTelemetry).toFixed(4)) : 0,
+  };
+
+  // Build funnel
+  const funnel = funnelRes.rows.map((r) => ({
+    status: r.status,
+    count:  parseInt(r.count, 10),
+  }));
+
+  // Build messages per day (fill missing days)
+  const activityMap = new Map<string, number>();
+  for (const r of activityRes.rows) {
+    activityMap.set(r.date.slice(0, 10), parseInt(r.count, 10));
+  }
+  const messagesPerDay: Array<{ date: string; count: number }> = [];
+  for (let i = periodDays - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    messagesPerDay.push({ date: key, count: activityMap.get(key) ?? 0 });
+  }
+
+  // Build intent distribution
+  const intentDistribution = intentRes.rows.map((r) => ({
+    intent: r.intent,
+    count:  parseInt(r.count, 10),
+  }));
+
+  // Build channel distribution
+  const channelDistribution = channelRes.rows.map((r) => ({
+    channel: r.channel,
+    count:   parseInt(r.count, 10),
+  }));
+
+  res.json({
+    period: periodParam,
+    stats,
+    aiPerformance,
+    funnel,
+    messagesPerDay,
+    intentDistribution,
+    channelDistribution,
+  });
+}
+
 function buildActivityText(eventType: string, meta: Record<string, unknown> | null): string {
   const name = (meta?.name as string) ?? (meta?.phone as string) ?? 'A lead';
   switch (eventType) {
