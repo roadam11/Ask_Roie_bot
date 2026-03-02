@@ -24,6 +24,8 @@ import {
   type AuthUser,
 } from '../middleware/auth.middleware.js';
 import { authRateLimiter } from '../middleware/rateLimit.middleware.js';
+import { validateBody } from '../middleware/validate.js';
+import { loginSchema, changePasswordSchema } from '../schemas/auth.schema.js';
 import logger from '../../utils/logger.js';
 
 const router = Router();
@@ -58,7 +60,7 @@ interface AdminUser {
  *
  * Sets httpOnly cookie with refresh token
  */
-router.post('/login', authRateLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
 
@@ -311,7 +313,7 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
  *   - success: boolean
  *   - message: Confirmation message
  */
-router.post('/change-password', async (req: Request, res: Response): Promise<void> => {
+router.post('/change-password', validateBody(changePasswordSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
 
