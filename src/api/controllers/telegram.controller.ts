@@ -16,6 +16,7 @@ import { Request, Response } from 'express';
 import logger from '../../utils/logger.js';
 import * as LeadService from '../../services/lead.service.js';
 import * as MessageService from '../../services/message.service.js';
+import { isNewWebhookEvent } from '../../services/webhook-dedupe.service.js';
 import * as ClaudeService from '../../services/claude.service.js';
 import type { ToolExecutor } from '../../services/claude.service.js';
 import * as TelegramService from '../../services/telegram.service.js';
@@ -65,6 +66,14 @@ export async function handleUpdate(
     // Skip non-private chats (groups, channels)
     if (!TelegramService.isPrivateChat(update)) {
       logger.debug('Ignoring non-private chat message');
+      return;
+    }
+
+    // Dedupe check — atomic INSERT ON CONFLICT, skip if already processed
+    const updateId = String(update.update_id);
+    const isNew = await isNewWebhookEvent('telegram', updateId);
+    if (!isNew) {
+      logger.info('Duplicate Telegram update skipped', { updateId });
       return;
     }
 
@@ -123,12 +132,7 @@ async function processMessage(parsed: {
       isCallback: parsed.isCallback,
     });
 
-    // Check idempotency - has this message been processed?
-    const alreadyProcessed = await MessageService.isMessageProcessed(telegramMessageId);
-    if (alreadyProcessed) {
-      logger.info('Telegram message already processed, skipping', { messageId: telegramMessageId });
-      return;
-    }
+    // Note: dedupe already handled at update_id level in handleUpdate()
 
     // Send typing indicator
     await TelegramService.sendTypingAction(chatId);

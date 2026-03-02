@@ -14,6 +14,7 @@ import logger from '../../utils/logger.js';
 import { normalizePhoneSafe } from '../../utils/phone-normalizer.js';
 import * as LeadService from '../../services/lead.service.js';
 import * as MessageService from '../../services/message.service.js';
+import { isNewWebhookEvent } from '../../services/webhook-dedupe.service.js';
 import * as ClaudeService from '../../services/claude.service.js';
 import type { ToolExecutor } from '../../services/claude.service.js';
 import * as WhatsAppService from '../../services/whatsapp.service.js';
@@ -205,10 +206,10 @@ async function processMessage(
       textLength: messageText.length,
     });
 
-    // Check idempotency - has this message been processed?
-    const alreadyProcessed = await MessageService.isMessageProcessed(whatsappMessageId);
-    if (alreadyProcessed) {
-      logger.info('Message already processed, skipping', { messageId: whatsappMessageId });
+    // Dedupe check — atomic INSERT ON CONFLICT, skip if already processed
+    const isNew = await isNewWebhookEvent('whatsapp', whatsappMessageId);
+    if (!isNew) {
+      logger.info('Duplicate WhatsApp message skipped', { messageId: whatsappMessageId });
       return;
     }
 
