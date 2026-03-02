@@ -24,6 +24,8 @@ interface RateLimitOptions {
   keyGenerator?: (req: Request) => string;
   skipFailedRequests?: boolean;
   message?: string;
+  /** Unique name to namespace this limiter's counters in the shared store */
+  name?: string;
 }
 
 // ============================================================================
@@ -55,10 +57,12 @@ export function createRateLimiter(options: RateLimitOptions) {
     maxRequests,
     keyGenerator = defaultKeyGenerator,
     message = 'Too many requests, please try again later',
+    name = '',
   } = options;
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    const key = keyGenerator(req);
+    const rawKey = keyGenerator(req);
+    const key = name ? `${name}:${rawKey}` : rawKey;
     const now = Date.now();
 
     let entry = rateLimitStore.get(key);
@@ -150,6 +154,7 @@ export function accountKeyGenerator(req: Request): string {
  * 100 requests per 15 minutes per user
  */
 export const dashboardRateLimiter = createRateLimiter({
+  name: 'dashboard',
   windowMs: 15 * 60 * 1000, // 15 minutes
   maxRequests: 100,
   keyGenerator: userKeyGenerator,
@@ -161,6 +166,7 @@ export const dashboardRateLimiter = createRateLimiter({
  * 20 requests per minute per user
  */
 export const writeRateLimiter = createRateLimiter({
+  name: 'write',
   windowMs: 60 * 1000, // 1 minute
   maxRequests: 20,
   keyGenerator: userKeyGenerator,
@@ -172,6 +178,7 @@ export const writeRateLimiter = createRateLimiter({
  * 10 attempts per 15 minutes per IP
  */
 export const authRateLimiter = createRateLimiter({
+  name: 'auth',
   windowMs: 15 * 60 * 1000, // 15 minutes
   maxRequests: 10,
   keyGenerator: defaultKeyGenerator,
