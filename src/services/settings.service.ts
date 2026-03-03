@@ -20,6 +20,8 @@ export interface AccountProfile {
   email?: string;
   timezone?: string;
   subjects?: string[];
+  levels?: string[];
+  price_per_lesson?: number;
   pricing?: string;
 }
 
