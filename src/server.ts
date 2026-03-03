@@ -36,8 +36,13 @@ app.use(requestIdMiddleware);
 // ============================================================================
 
 // CORS configuration
+const corsOrigin = process.env.CORS_ORIGIN;
 app.use(cors({
-  origin: config.server.isDevelopment ? '*' : true,
+  origin: config.server.isDevelopment
+    ? '*'
+    : corsOrigin
+      ? corsOrigin.split(',').map((o) => o.trim())
+      : true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-Id'],
   exposedHeaders: ['X-Request-Id'],
