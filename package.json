@@ -24,6 +24,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "e2e": "tsx src/scripts/e2e-smoke.ts",
     "typecheck": "tsc --noEmit",
+    "ai-eval": "dotenv -e .env.railway -- tsx src/ai-evaluation/run-evaluation.ts",
     "worker:followup": "tsx src/workers/followup.worker.ts",
     "worker:calendly": "tsx src/workers/calendly.worker.ts",
     "worker:scheduler": "tsx src/workers/scheduler.ts"
