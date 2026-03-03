@@ -12,8 +12,27 @@
 
 import winston from 'winston';
 import config from '../config/index.js';
+import { getRequestContext } from './request-context.js';
 
 const { combine, timestamp, printf, colorize, json, errors } = winston.format;
+
+// ============================================================================
+// Request Context Injection
+// ============================================================================
+
+/**
+ * Winston format that injects requestId (and optional accountId/route)
+ * from AsyncLocalStorage into every log entry automatically.
+ */
+const injectRequestContext = winston.format((info) => {
+  const ctx = getRequestContext();
+  if (ctx) {
+    info.requestId = ctx.requestId;
+    if (ctx.accountId) info.accountId = ctx.accountId;
+    if (ctx.route) info.route = ctx.route;
+  }
+  return info;
+});
 
 // ============================================================================
 // Custom Formats
@@ -45,6 +64,7 @@ const devFormat = printf(({ level, message, timestamp, ...metadata }) => {
  * Production format: JSON for structured logging
  */
 const prodFormat = combine(
+  injectRequestContext(),
   timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
   errors({ stack: true }),
   json()
@@ -54,6 +74,7 @@ const prodFormat = combine(
  * Development format: pretty and colored
  */
 const developmentFormat = combine(
+  injectRequestContext(),
   colorize({ all: true }),
   timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   errors({ stack: true }),
@@ -78,6 +99,7 @@ const errorFileTransport = new winston.transports.File({
   filename: 'logs/error.log',
   level: 'error',
   format: combine(
+    injectRequestContext(),
     timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
     errors({ stack: true }),
     json()
@@ -92,6 +114,7 @@ const errorFileTransport = new winston.transports.File({
 const combinedFileTransport = new winston.transports.File({
   filename: 'logs/combined.log',
   format: combine(
+    injectRequestContext(),
     timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
     errors({ stack: true }),
     json()

@@ -25,6 +25,13 @@ import { errorHandler, notFoundHandler } from './api/middleware/error-handler.js
 const app: Express = express();
 
 // ============================================================================
+// Request ID (must be FIRST middleware)
+// ============================================================================
+
+import { requestIdMiddleware } from './api/middleware/request-id.js';
+app.use(requestIdMiddleware);
+
+// ============================================================================
 // Security Middleware
 // ============================================================================
 
@@ -32,7 +39,8 @@ const app: Express = express();
 app.use(cors({
   origin: config.server.isDevelopment ? '*' : true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-Id'],
+  exposedHeaders: ['X-Request-Id'],
   credentials: true,
 }));
 

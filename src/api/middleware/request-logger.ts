@@ -49,6 +49,7 @@ export function requestLogger(
       res.statusCode,
       duration,
       {
+        requestId: req.requestId,
         query: Object.keys(req.query).length > 0 ? req.query : undefined,
         ip: req.ip,
         userAgent: req.get('user-agent'),
