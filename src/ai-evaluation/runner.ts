@@ -111,8 +111,8 @@ export async function runScenario(
   try {
     // Create test lead
     const leadRes = await queryOne<{ id: string }>(
-      `INSERT INTO leads (phone, name, source, is_demo, agent_id, status, lead_state)
-       VALUES ($1, $2, 'ai_eval', true, $3, 'new', 'new')
+      `INSERT INTO leads (phone, name, is_demo, agent_id, status, lead_state)
+       VALUES ($1, $2, true, $3, 'new', 'new')
        RETURNING id`,
       [TEST_PHONE, leadName, tenant.agentId],
     );

@@ -63,8 +63,8 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
 
     // Create demo lead
     const leadRes = await queryOne<{ id: string }>(
-      `INSERT INTO leads (phone, name, source, is_demo, agent_id, status, lead_state)
-       VALUES ($1, $2, 'demo', true, $3, 'new', 'new')
+      `INSERT INTO leads (phone, name, is_demo, agent_id, status, lead_state)
+       VALUES ($1, $2, true, $3, 'new', 'new')
        RETURNING id`,
       [DEMO_PHONE, DEMO_LEAD_NAME, agent.id],
     );
