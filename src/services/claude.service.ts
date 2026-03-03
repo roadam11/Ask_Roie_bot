@@ -20,6 +20,7 @@ import type { Lead } from '../types/index.js';
 import type { RawTelemetryPayload } from './telemetry.service.js';
 import { loadSettingsForLead } from './settings.service.js';
 import type { AccountSettings } from './settings.service.js';
+import { validateAIResponse, ensureCTA } from '../utils/response-validator.js';
 
 // ============================================================================
 // Types
@@ -445,6 +446,7 @@ export async function sendMessage(
       const response = await anthropic.messages.create({
         model: config.anthropic.model,
         max_tokens: config.anthropic.maxTokens,
+        temperature: 0.4,
         system: systemPrompt,
         messages,
         tools: TOOLS,
@@ -575,6 +577,7 @@ export async function continueAfterToolUse(
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens,
+      temperature: 0.4,
       system: systemPrompt,
       messages,
       tools: TOOLS,
@@ -781,7 +784,10 @@ export async function sendMessageWithToolLoop(
   const settings = await safeLoadSettings(lead.id);
 
   const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
-  let messages = formatMessagesForClaude(conversationHistory);
+
+  // Trim conversation history to last 10 messages (5 turns) to reduce token usage
+  const trimmedHistory = conversationHistory.slice(-10);
+  let messages = formatMessagesForClaude(trimmedHistory);
 
   if (messages.length === 0) {
     throw new Error('No messages to send to Claude');
@@ -808,6 +814,7 @@ export async function sendMessageWithToolLoop(
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens,
+      temperature: 0.4,
       system: systemPrompt,
       messages,
       tools: TOOLS,
@@ -838,9 +845,71 @@ export async function sendMessageWithToolLoop(
       finalContent += (finalContent ? '\n\n' : '') + parsed.content;
     }
 
-    // If no tool use, we're done
+    // If no tool use, we're done — apply post-AI guards
     if (!parsed.hasToolUse || parsed.stopReason !== 'tool_use') {
       const latencyMs = Date.now() - startTime;
+
+      // ── Post-AI Guard 1: Numeric hallucination check ──
+      const profileData: Record<string, unknown> = {};
+      if (settings?.profile) {
+        const p = settings.profile as Record<string, unknown>;
+        if (p.price_per_lesson) profileData.price_per_lesson = p.price_per_lesson;
+        if (p.price_per_lesson_frontal) profileData.price_per_lesson_frontal = p.price_per_lesson_frontal;
+      }
+
+      const validation = validateAIResponse(finalContent, profileData);
+      if (!validation.isClean) {
+        logger.warn('[AI-GUARD] Hallucination detected! Numbers:', {
+          suspicious: validation.suspiciousNumbers,
+          known: validation.knownNumbers,
+          leadId: lead.id,
+        });
+
+        // ONE retry with strict warning
+        try {
+          const retryMessages: Anthropic.MessageParam[] = [
+            ...messages,
+            { role: 'assistant', content: finalContent },
+            { role: 'user', content: 'SYSTEM WARNING: Your response contained numbers not in the profile. Regenerate without inventing any numbers. Only use numbers from TUTOR_PROFILE.' },
+          ];
+
+          const retryResponse = await anthropic.messages.create({
+            model: config.anthropic.model,
+            max_tokens: config.anthropic.maxTokens,
+            temperature: 0.2,
+            system: systemPrompt,
+            messages: retryMessages,
+            tools: TOOLS,
+          });
+
+          const retryParsed = parseResponse(retryResponse);
+          totalInputTokens += retryParsed.usage.inputTokens;
+          totalOutputTokens += retryParsed.usage.outputTokens;
+          totalCostUsd += retryParsed.costUsd;
+          apiCallCount++;
+
+          const retryValidation = validateAIResponse(retryParsed.content, profileData);
+          if (retryValidation.isClean && retryParsed.content.length > 0) {
+            logger.info('[AI-GUARD] Retry succeeded — clean response', { leadId: lead.id });
+            finalContent = retryParsed.content;
+          } else {
+            logger.error('[AI-GUARD] Retry STILL has suspicious numbers', {
+              suspicious: retryValidation.suspiciousNumbers,
+              leadId: lead.id,
+            });
+            // Use original response, logged for monitoring
+          }
+        } catch (retryErr) {
+          logger.error('[AI-GUARD] Retry API call failed', {
+            error: (retryErr as Error).message,
+            leadId: lead.id,
+          });
+        }
+      }
+
+      // ── Post-AI Guard 2: CTA append ──
+      const ctaResult = ensureCTA(finalContent);
+      finalContent = ctaResult.text;
 
       logger.info('Agent loop completed', {
         leadId: lead.id,
@@ -849,6 +918,8 @@ export async function sendMessageWithToolLoop(
         finalContentLength: finalContent.length,
         totalTokens: totalInputTokens + totalOutputTokens,
         totalCostUsd: totalCostUsd.toFixed(4),
+        hallucinationGuardTriggered: !validation.isClean,
+        ctaAppended: ctaResult.appended,
       });
 
       return {
@@ -959,6 +1030,10 @@ export async function sendMessageWithToolLoop(
   if (!finalContent) {
     finalContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
   }
+
+  // Apply CTA guard even on fallback path
+  const ctaResult = ensureCTA(finalContent);
+  finalContent = ctaResult.text;
 
   const latencyMs = Date.now() - startTime;
 

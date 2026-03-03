@@ -239,6 +239,29 @@ async function processMessage(parsed: {
       return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
     };
 
+    // ── Empty input guard — skip AI call for empty/whitespace messages ──
+    if (!messageText.trim()) {
+      const fallbackResponse = 'היי! 😊 במה אפשר לעזור?';
+      const botMessage = await MessageService.createBotMessage(
+        lead.id, fallbackResponse, 0, 'fallback', 0, [], conversationId,
+      );
+      await TelegramService.sendMessage(chatId, fallbackResponse);
+      logger.info('[AI-GUARD] Empty input guard triggered', { leadId: lead.id });
+      // Emit WS events
+      try {
+        const wss = getWebSocketServer();
+        if (wss && conv) {
+          const tenantId = await getAccountIdByLeadId(lead.id);
+          if (tenantId) {
+            emitMessageNew(wss, conv.id, userMessage.id, tenantId);
+            emitMessageNew(wss, conv.id, botMessage.id, tenantId);
+            emitOverviewRefresh(wss, tenantId);
+          }
+        }
+      } catch { /* ignore emit errors */ }
+      return;
+    }
+
     // Call Claude API with agentic loop (automatic tool execution)
     const agentResult = await ClaudeService.sendMessageWithToolLoop(
       lead,
