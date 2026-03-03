@@ -587,6 +587,11 @@ function getTemplateForAutomationType(type: AutomationFollowUpType): string {
  * Check if lead is eligible for follow-up
  */
 function checkEligibility(lead: Lead): { eligible: boolean; reason?: string } {
+  // Skip demo leads — no point following up on fake numbers
+  if (lead.is_demo) {
+    return { eligible: false, reason: 'Demo lead — skip follow-up' };
+  }
+
   // Check if opted out
   if (lead.opted_out) {
     return { eligible: false, reason: 'Lead opted out' };

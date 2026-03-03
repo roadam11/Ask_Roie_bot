@@ -244,7 +244,9 @@ async function processMessage(parsed: {
       lead.id,
       agentResult.content,
       agentResult.totalUsage.totalTokens,
-      agentResult.model
+      agentResult.model,
+      agentResult.responseTimeMs,
+      agentResult.executedToolCalls.map(tc => tc.name),
     );
 
     // Send response via Telegram

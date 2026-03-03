@@ -88,12 +88,20 @@ function toMessageDTO(row: Record<string, unknown>, conversationId: string) {
     bot:    'ai',
     system: 'ai',
   };
+  const sender = roleMap[row.role as string] ?? 'ai';
   return {
     id:             row.id,
     conversationId: (row.conversation_id as string | null) ?? conversationId,
-    sender:         roleMap[row.role as string] ?? 'ai',
+    sender,
     text:           row.content as string,
     createdAt:      row.created_at,
+    // AI telemetry (only meaningful for bot messages)
+    ...(sender === 'ai' ? {
+      tokensUsed:     row.tokens_used != null ? Number(row.tokens_used) : null,
+      modelUsed:      (row.model_used as string | null) ?? null,
+      responseTimeMs: row.response_time_ms != null ? Number(row.response_time_ms) : null,
+      toolCallsUsed:  (row.tool_calls_used as string[] | null) ?? null,
+    } : {}),
   };
 }
 
@@ -470,7 +478,8 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
   if (!conv) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
 
   const rowsRes = await query<Record<string, unknown>>(
-    `SELECT m.id, m.role, m.content, m.created_at, m.conversation_id
+    `SELECT m.id, m.role, m.content, m.created_at, m.conversation_id,
+            m.tokens_used, m.model_used, m.response_time_ms, m.tool_calls_used
      FROM messages m
      WHERE m.lead_id = $1
        AND (m.conversation_id = $2 OR m.conversation_id IS NULL)
@@ -522,7 +531,8 @@ export async function getMessagesCursor(req: AuthenticatedRequest, res: Response
   params.push(limit + 1);
 
   const rowsRes = await query<Record<string, unknown>>(
-    `SELECT m.id, m.role, m.content, m.created_at, m.conversation_id
+    `SELECT m.id, m.role, m.content, m.created_at, m.conversation_id,
+            m.tokens_used, m.model_used, m.response_time_ms, m.tool_calls_used
      FROM messages m
      WHERE ${where}
      ORDER BY m.created_at ASC, m.id ASC
@@ -1051,37 +1061,36 @@ export async function updateSettings(req: AuthenticatedRequest, res: Response): 
     [aid],
   );
 
+  if (!body.profile && !body.behavior) {
+    res.status(400).json({ code: 'NO_FIELDS', message: 'No fields to update' }); return;
+  }
+
+  // Ensure row exists (upsert-safe)
+  await query(
+    `INSERT INTO settings (account_id, profile, behavior)
+     VALUES ($1, '{}'::jsonb, '{}'::jsonb)
+     ON CONFLICT (account_id) DO NOTHING`,
+    [aid],
+  );
+
+  // Merge fields into existing row
   const sets: string[]  = ['last_saved_at = NOW()', 'updated_at = NOW()'];
   const params: unknown[] = [];
   let pi = 1;
 
   if (body.profile) {
-    // Merge with existing profile
-    sets.push(`profile = profile || $${pi}::jsonb`);
+    sets.push(`profile = COALESCE(profile, '{}'::jsonb) || $${pi}::jsonb`);
     params.push(JSON.stringify(body.profile));
     pi++;
   }
   if (body.behavior) {
-    sets.push(`behavior = behavior || $${pi}::jsonb`);
+    sets.push(`behavior = COALESCE(behavior, '{}'::jsonb) || $${pi}::jsonb`);
     params.push(JSON.stringify(body.behavior));
     pi++;
   }
 
-  if (sets.length === 2 && !body.profile && !body.behavior) {
-    res.status(400).json({ code: 'NO_FIELDS', message: 'No fields to update' }); return;
-  }
-
   params.push(aid);
-
-  await query(
-    `INSERT INTO settings (account_id, profile, behavior)
-     VALUES ($${pi}, COALESCE($1::jsonb, '{}'), COALESCE($2::jsonb, '{}'))
-     ON CONFLICT (account_id) DO UPDATE SET ${sets.join(', ')}`,
-    params,
-  ).catch(async () => {
-    // Simpler upsert fallback
-    await query(`UPDATE settings SET ${sets.join(', ')} WHERE account_id = $${pi}`, params);
-  });
+  await query(`UPDATE settings SET ${sets.join(', ')} WHERE account_id = $${pi}`, params);
 
   // Audit — fire and forget
   logAudit({

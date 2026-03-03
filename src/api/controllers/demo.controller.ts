@@ -168,6 +168,8 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
         aiResult.content,
         aiResult.totalUsage.totalTokens,
         aiResult.model,
+        aiResult.responseTimeMs,
+        aiResult.executedToolCalls.map(tc => tc.name),
       );
 
       // Update conversation with last message

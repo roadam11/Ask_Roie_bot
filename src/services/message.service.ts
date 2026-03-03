@@ -81,12 +81,16 @@ export async function createBotMessage(
   leadId: string,
   content: string,
   tokensUsed?: number,
-  modelUsed?: string
+  modelUsed?: string,
+  responseTimeMs?: number,
+  toolCallsUsed?: string[],
 ): Promise<NonNullable<Message>> {
   // Create the message
   const message = await MessageModel.create(leadId, 'bot', content, {
     tokensUsed,
     modelUsed,
+    responseTimeMs,
+    toolCallsUsed,
   });
 
   // Update lead's last_bot_message_at timestamp

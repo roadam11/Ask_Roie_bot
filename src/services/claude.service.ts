@@ -743,6 +743,9 @@ export interface AgentLoopResult {
   /** Number of API calls made */
   apiCallCount: number;
 
+  /** Response time in milliseconds */
+  responseTimeMs: number;
+
   /** Raw telemetry payload for ai_telemetry table */
   telemetry: RawTelemetryPayload;
 }
@@ -859,6 +862,7 @@ export async function sendMessageWithToolLoop(
         totalCostUsd,
         model,
         apiCallCount,
+        responseTimeMs: latencyMs,
         telemetry: buildTelemetryPayload(
           executedToolCalls, finalContent,
           totalInputTokens, totalOutputTokens,
@@ -969,6 +973,7 @@ export async function sendMessageWithToolLoop(
     totalCostUsd,
     model,
     apiCallCount,
+    responseTimeMs: latencyMs,
     telemetry: buildTelemetryPayload(
       executedToolCalls, finalContent,
       totalInputTokens, totalOutputTokens,

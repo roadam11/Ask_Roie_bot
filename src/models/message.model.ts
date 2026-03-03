@@ -38,6 +38,8 @@ interface Message {
   whatsapp_message_id: string | null;
   tokens_used: number | null;
   model_used: string | null;
+  response_time_ms: number | null;
+  tool_calls_used: string[] | null;
   created_at: Date;
 }
 
@@ -48,6 +50,8 @@ interface CreateMessageOptions {
   whatsappMessageId?: string;
   tokensUsed?: number;
   modelUsed?: string;
+  responseTimeMs?: number;
+  toolCallsUsed?: string[];
 }
 
 // ============================================================================
@@ -85,8 +89,8 @@ export async function create(
   }
 
   const sql = `
-    INSERT INTO messages (lead_id, role, content, whatsapp_message_id, tokens_used, model_used)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO messages (lead_id, role, content, whatsapp_message_id, tokens_used, model_used, response_time_ms, tool_calls_used)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
   `;
 
@@ -97,6 +101,8 @@ export async function create(
     options?.whatsappMessageId || null,
     options?.tokensUsed || null,
     options?.modelUsed || null,
+    options?.responseTimeMs || null,
+    options?.toolCallsUsed?.length ? options.toolCallsUsed : null,
   ];
 
   try {
