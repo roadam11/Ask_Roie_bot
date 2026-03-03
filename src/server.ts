@@ -200,6 +200,12 @@ let server: ReturnType<typeof app.listen> | null = null;
  */
 async function startServer(): Promise<void> {
   try {
+    // Production guard: require Telegram webhook secret
+    if (config.server.isProduction && config.telegram.enabled && !config.telegram.webhookSecret) {
+      logger.error('FATAL: TELEGRAM_WEBHOOK_SECRET not set in production. Exiting.');
+      process.exit(1);
+    }
+
     // Connect to database
     logger.info('Connecting to database...');
     await connectDatabase();

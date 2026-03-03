@@ -291,8 +291,8 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
   try {
     const wss = getWebSocketServer();
     if (wss) {
-      emitLeadUpdated(wss, id);
-      emitOverviewRefresh(wss);
+      emitLeadUpdated(wss, id, aid);
+      emitOverviewRefresh(wss, aid);
     }
   } catch (emitError) {
     logger.warn('Realtime emit failed', { error: emitError, event: 'lead:updated', leadId: id });
@@ -341,7 +341,7 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
   try {
     const wss = getWebSocketServer();
     if (wss) {
-      emitOverviewRefresh(wss);
+      emitOverviewRefresh(wss, aid);
     }
   } catch (emitError) {
     logger.warn('Realtime emit failed', { error: emitError, event: 'overview:refresh' });
@@ -384,7 +384,7 @@ export async function restoreLead(req: AuthenticatedRequest, res: Response): Pro
   try {
     const wss = getWebSocketServer();
     if (wss) {
-      emitOverviewRefresh(wss);
+      emitOverviewRefresh(wss, aid);
     }
   } catch (emitError) {
     logger.warn('Realtime emit failed', { error: emitError, event: 'overview:refresh' });
@@ -592,7 +592,7 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
   try {
     const wss = getWebSocketServer();
     if (wss) {
-      emitMessageNew(wss, id, msg.id as string);
+      emitMessageNew(wss, id, msg.id as string, aid);
     }
   } catch (emitError) {
     logger.warn('Realtime emit failed', { error: emitError, event: 'message:new', conversationId: id });
@@ -654,7 +654,7 @@ export async function updateConversationStatus(req: AuthenticatedRequest, res: R
   try {
     const wss = getWebSocketServer();
     if (wss) {
-      emitConversationUpdated(wss, id, status as 'open' | 'resolved' | 'flagged');
+      emitConversationUpdated(wss, id, status as 'open' | 'resolved' | 'flagged', aid);
     }
   } catch (emitError) {
     logger.warn('Realtime emit failed', { error: emitError, event: 'conversation:updated', conversationId: id });

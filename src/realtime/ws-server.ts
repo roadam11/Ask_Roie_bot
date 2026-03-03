@@ -11,6 +11,7 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
+import jwt from 'jsonwebtoken';
 import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { URL } from 'url';
@@ -18,6 +19,8 @@ import { verifyAccessToken } from '../api/middleware/auth.middleware.js';
 import logger from '../utils/logger.js';
 
 let wss: WebSocketServer | null = null;
+
+const CLEANUP_INTERVAL_MS = 60_000; // 60 seconds
 
 /**
  * Attach WebSocket server to the HTTP server.
@@ -38,6 +41,11 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
       return;
     }
 
+    // Store tenant ID + token expiry for isolation + cleanup
+    (ws as any).accountId = user.accountId;
+    const decoded = token ? jwt.decode(token) as { exp?: number } | null : null;
+    (ws as any).tokenExp = decoded?.exp ?? undefined;
+
     logger.info('WebSocket client connected', { userId: user.id, accountId: user.accountId });
 
     ws.on('close', () => {
@@ -55,6 +63,24 @@ export function attachWebSocketServer(server: Server): WebSocketServer {
   wss.on('error', (err) => {
     logger.error('WebSocket server error', { error: err.message });
   });
+
+  // Periodically close connections whose JWT has expired
+  setInterval(() => {
+    try {
+      if (!wss) return;
+      const now = Math.floor(Date.now() / 1000);
+      wss.clients.forEach((client: any) => {
+        if (client.tokenExp && now > client.tokenExp) {
+          logger.info('[WS] Closing expired connection', { accountId: client.accountId });
+          client.close(4001, 'Token expired');
+        } else if (!client.tokenExp) {
+          logger.warn('[WS] Client without tokenExp — skipping', { accountId: client.accountId });
+        }
+      });
+    } catch (err) {
+      logger.error('[WS] Cleanup interval error:', err);
+    }
+  }, CLEANUP_INTERVAL_MS);
 
   logger.info('WebSocket server attached at /ws');
   return wss;

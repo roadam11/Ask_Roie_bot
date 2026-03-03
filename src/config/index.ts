@@ -77,6 +77,9 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z
     .string()
     .default(''),
+  TELEGRAM_WEBHOOK_SECRET: z
+    .string()
+    .default(''),
 
   // JWT Secrets
   JWT_SECRET: z
@@ -239,6 +242,8 @@ interface TelegramConfig {
   botToken: string;
   /** Whether Telegram is enabled */
   enabled: boolean;
+  /** Secret token for webhook verification (X-Telegram-Bot-Api-Secret-Token header) */
+  webhookSecret: string;
 }
 
 /**
@@ -321,6 +326,7 @@ const config: Config = {
   telegram: {
     botToken: env.TELEGRAM_BOT_TOKEN,
     enabled: !!env.TELEGRAM_BOT_TOKEN,
+    webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
   },
 
   anthropic: {

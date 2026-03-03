@@ -27,7 +27,7 @@ import { markFollowUpSent } from '../services/follow-up-decision.service.js';
 import logger from '../utils/logger.js';
 import type { Lead, AutomationFollowUpType } from '../types/index.js';
 import { getWebSocketServer } from '../realtime/ws-server.js';
-import { emitLeadUpdated, emitOverviewRefresh } from '../realtime/emitter.js';
+import { emitLeadUpdated, emitOverviewRefresh, getAccountIdByLeadId } from '../realtime/emitter.js';
 
 // ============================================================================
 // Platform Detection
@@ -258,8 +258,11 @@ async function processLegacyFollowUp(job: Job<LegacyFollowUpJobData>): Promise<F
     try {
       const wss = getWebSocketServer();
       if (wss) {
-        emitLeadUpdated(wss, leadId);
-        emitOverviewRefresh(wss);
+        const tenantId = await getAccountIdByLeadId(leadId);
+        if (tenantId) {
+          emitLeadUpdated(wss, leadId, tenantId);
+          emitOverviewRefresh(wss, tenantId);
+        }
       }
     } catch (emitError) {
       logger.warn('Realtime emit failed', { error: emitError, event: 'lead:updated', leadId });
@@ -475,8 +478,11 @@ async function processAutomationFollowUp(
     try {
       const wss = getWebSocketServer();
       if (wss) {
-        emitLeadUpdated(wss, leadId);
-        emitOverviewRefresh(wss);
+        const tenantId = await getAccountIdByLeadId(leadId);
+        if (tenantId) {
+          emitLeadUpdated(wss, leadId, tenantId);
+          emitOverviewRefresh(wss, tenantId);
+        }
       }
     } catch (emitError) {
       logger.warn('Realtime emit failed', { error: emitError, event: 'lead:updated', leadId });

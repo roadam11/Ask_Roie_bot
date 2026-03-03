@@ -30,6 +30,7 @@ import {
   emitLeadUpdated,
   emitMessageNew,
   emitOverviewRefresh,
+  getAccountIdByLeadId,
 } from '../../realtime/emitter.js';
 import { logTelemetry } from '../../services/telemetry.service.js';
 
@@ -309,21 +310,26 @@ async function processMessage(
     try {
       const wss = getWebSocketServer();
       if (wss) {
-        if (created) {
-          emitLeadCreated(wss, lead.id);
-        }
+        const tenantId = await getAccountIdByLeadId(lead.id);
+        if (tenantId) {
+          if (created) {
+            emitLeadCreated(wss, lead.id, tenantId);
+          }
 
-        if (conv) {
-          emitMessageNew(wss, conv.id, userMessage.id);
-          emitMessageNew(wss, conv.id, botMessage.id);
-        }
+          if (conv) {
+            emitMessageNew(wss, conv.id, userMessage.id, tenantId);
+            emitMessageNew(wss, conv.id, botMessage.id, tenantId);
+          }
 
-        // Emit lead:updated if AI tool changed lead state
-        if (updatedLead.status !== lead.status || updatedLead.lead_state !== lead.lead_state) {
-          emitLeadUpdated(wss, lead.id);
-        }
+          // Emit lead:updated if AI tool changed lead state
+          if (updatedLead.status !== lead.status || updatedLead.lead_state !== lead.lead_state) {
+            emitLeadUpdated(wss, lead.id, tenantId);
+          }
 
-        emitOverviewRefresh(wss);
+          emitOverviewRefresh(wss, tenantId);
+        } else {
+          logger.warn('Could not resolve accountId for lead — skipping realtime', { leadId: lead.id });
+        }
       }
     } catch (emitError) {
       logger.warn('Realtime emit failed', { error: emitError, leadId: lead.id });

@@ -19,7 +19,7 @@ process.env.LOG_LEVEL = 'error'; // Minimize log noise in tests
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || 'postgresql://localhost:5432/ask_roie_test';
 
 // API Keys (use test/mock values)
-process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
+process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-for-testing-only-not-real';
 process.env.WHATSAPP_PHONE_NUMBER_ID = 'test-phone-id';
 process.env.WHATSAPP_ACCESS_TOKEN = 'test-whatsapp-token';
 process.env.WHATSAPP_VERIFY_TOKEN = 'test-verify-token';
@@ -117,8 +117,7 @@ export async function createTestMessage(
 // Jest Lifecycle Hooks
 // ============================================================================
 
-// Increase timeout for database operations
-jest.setTimeout(10000);
+// Note: timeout is configured in jest.config.js (testTimeout: 10000)
 
 // Clean up after all tests
 afterAll(async () => {
