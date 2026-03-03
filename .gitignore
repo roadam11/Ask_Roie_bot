@@ -13,3 +13,4 @@ coverage/
 .idea/
 *.tsbuildinfo
 .cache/
+src/ai-evaluation/evaluation-report.json
