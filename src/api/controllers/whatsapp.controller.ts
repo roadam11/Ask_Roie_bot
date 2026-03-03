@@ -263,8 +263,15 @@ async function processMessage(
       return;
     }
 
+    // Look up active conversation for linking messages
+    const conv = await queryOne<{ id: string }>(
+      `SELECT id FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [lead.id],
+    );
+    const conversationId = conv?.id;
+
     // Save user message
-    const userMessage = await MessageService.createUserMessage(lead.id, messageText, whatsappMessageId);
+    const userMessage = await MessageService.createUserMessage(lead.id, messageText, whatsappMessageId, conversationId);
 
     // Get conversation history for Claude
     const conversationHistory = await MessageService.getConversationForClaude(lead.id, 20);
@@ -300,6 +307,7 @@ async function processMessage(
       agentResult.model,
       agentResult.responseTimeMs,
       agentResult.executedToolCalls.map(tc => tc.name),
+      conversationId,
     );
 
     // Send response via WhatsApp
@@ -319,12 +327,6 @@ async function processMessage(
       apiCalls: agentResult.apiCallCount,
       statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
     });
-
-    // Look up active conversation (used by both realtime and telemetry)
-    const conv = await queryOne<{ id: string }>(
-      `SELECT id FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
-      [lead.id],
-    );
 
     // Realtime side-effects — fire and forget, after all mutations complete
     try {

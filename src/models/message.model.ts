@@ -33,6 +33,7 @@ type MessageRole = 'user' | 'bot' | 'system';
 interface Message {
   id: string;
   lead_id: string;
+  conversation_id: string | null;
   role: MessageRole;
   content: string;
   whatsapp_message_id: string | null;
@@ -47,6 +48,7 @@ interface Message {
  * Options for creating a message
  */
 interface CreateMessageOptions {
+  conversationId?: string;
   whatsappMessageId?: string;
   tokensUsed?: number;
   modelUsed?: string;
@@ -89,13 +91,14 @@ export async function create(
   }
 
   const sql = `
-    INSERT INTO messages (lead_id, role, content, whatsapp_message_id, tokens_used, model_used, response_time_ms, tool_calls_used)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO messages (lead_id, conversation_id, role, content, whatsapp_message_id, tokens_used, model_used, response_time_ms, tool_calls_used)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING *
   `;
 
   const values = [
     leadId,
+    options?.conversationId || null,
     role,
     content,
     options?.whatsappMessageId || null,

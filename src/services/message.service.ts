@@ -48,11 +48,13 @@ type Message = Awaited<ReturnType<typeof MessageModel.findById>> & {};
 export async function createUserMessage(
   leadId: string,
   content: string,
-  whatsappMessageId?: string
+  whatsappMessageId?: string,
+  conversationId?: string
 ): Promise<NonNullable<Message>> {
   // Create the message (with idempotency check if whatsappMessageId provided)
   const message = await MessageModel.create(leadId, 'user', content, {
     whatsappMessageId,
+    conversationId,
   });
 
   // Update lead's last_user_message_at timestamp
@@ -84,6 +86,7 @@ export async function createBotMessage(
   modelUsed?: string,
   responseTimeMs?: number,
   toolCallsUsed?: string[],
+  conversationId?: string,
 ): Promise<NonNullable<Message>> {
   // Create the message
   const message = await MessageModel.create(leadId, 'bot', content, {
@@ -91,6 +94,7 @@ export async function createBotMessage(
     modelUsed,
     responseTimeMs,
     toolCallsUsed,
+    conversationId,
   });
 
   // Update lead's last_bot_message_at timestamp

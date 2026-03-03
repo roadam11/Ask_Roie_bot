@@ -668,8 +668,14 @@ export async function replyToLead(
       return;
     }
 
+    // Look up active conversation for linking message
+    const conv = await queryOne<{ id: string }>(
+      `SELECT id FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [lead.id],
+    );
+
     // Save message to database
-    await MessageService.createBotMessage(lead.id, message.trim(), 0, 'manual');
+    await MessageService.createBotMessage(lead.id, message.trim(), 0, 'manual', undefined, undefined, conv?.id);
 
     // Mark as human contacted (blocks automation for 48h) — use lead.id from tenant-verified query
     await query(

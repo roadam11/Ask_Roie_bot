@@ -75,6 +75,7 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
     }
 
     const leadId = leadRes.id;
+    logger.info('[DEMO] Demo lead created', { leadId, agentId: agent.id, accountId: aid });
 
     // Build a Lead object for the AI pipeline
     const lead: Lead = {
@@ -101,9 +102,10 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
     }
 
     const conversationId = convRes.id;
+    logger.info('[DEMO] Conversation created', { conversationId, leadId });
 
-    // Save student message
-    await MessageService.createUserMessage(leadId, DEMO_MESSAGE);
+    // Save student message (linked to conversation)
+    await MessageService.createUserMessage(leadId, DEMO_MESSAGE, undefined, conversationId);
 
     // Tool executor that skips WhatsApp sends for demo leads
     const toolExecutor: ToolExecutor = async (toolCall) => {
@@ -155,11 +157,19 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
     };
 
     // Run REAL AI pipeline with teacher's settings
+    logger.info('[DEMO] Starting AI pipeline', { leadId });
     const aiResult = await sendMessageWithToolLoop(
       lead,
       [{ role: 'user', content: DEMO_MESSAGE }],
       toolExecutor,
     );
+
+    logger.info('[DEMO] AI pipeline completed', {
+      leadId,
+      contentLength: aiResult.content?.length ?? 0,
+      toolCalls: aiResult.executedToolCalls.length,
+      responseTimeMs: aiResult.responseTimeMs,
+    });
 
     // Save AI response
     if (aiResult.content) {
@@ -170,6 +180,7 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
         aiResult.model,
         aiResult.responseTimeMs,
         aiResult.executedToolCalls.map(tc => tc.name),
+        conversationId,
       );
 
       // Update conversation with last message
@@ -202,7 +213,16 @@ export async function simulateLead(req: AuthenticatedRequest, res: Response): Pr
     });
 
   } catch (err) {
-    logger.error('[DEMO] simulate-lead failed', { error: (err as Error).message, stack: (err as Error).stack });
-    res.status(500).json({ code: 'DEMO_FAILED', message: 'Demo simulation failed' });
+    const error = err as Error;
+    logger.error('[DEMO] simulate-lead failed', {
+      error: error.message,
+      stack: error.stack,
+      accountId: aid,
+    });
+    res.status(500).json({
+      code: 'DEMO_FAILED',
+      message: 'Demo simulation failed',
+      detail: error.message,
+    });
   }
 }
