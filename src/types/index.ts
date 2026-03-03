@@ -151,6 +151,9 @@ export interface Lead {
   /** Calendly event URI if booked */
   calendly_event_uri?: string;
 
+  /** Whether this is a demo/simulated lead */
+  is_demo?: boolean;
+
   /** Whether the lead has opted out of communications */
   opted_out?: boolean;
 

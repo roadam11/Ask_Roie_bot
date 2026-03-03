@@ -2,6 +2,7 @@
  * Alerts Service - Generate system alerts
  */
 import { query } from '../database/connection.js';
+import { EXCLUDE_DEMO_BARE } from '../utils/query-helpers.js';
 
 export async function generateAlerts(accountId: string): Promise<number> {
   let count = 0;
@@ -20,7 +21,7 @@ async function checkBookingIntentPending(accountId: string): Promise<number> {
   const result = await query(
     `SELECT id, name, phone, updated_at
      FROM leads
-     WHERE deleted_at IS NULL
+     WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE}
        AND agent_id IN (SELECT id FROM agents WHERE account_id = $1)
        AND lead_state = 'booking_intent'
        AND updated_at < NOW() - INTERVAL '24 hours'`,
@@ -48,7 +49,7 @@ async function checkFollowupFailures(accountId: string): Promise<number> {
     `SELECT lead_id, COUNT(*) as failure_count
      FROM followups
      WHERE lead_id IN (
-       SELECT id FROM leads WHERE deleted_at IS NULL AND agent_id IN (
+       SELECT id FROM leads WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE} AND agent_id IN (
          SELECT id FROM agents WHERE account_id = $1
        )
      )
@@ -81,7 +82,7 @@ async function checkHighFallbackRate(accountId: string): Promise<number> {
        COUNT(CASE WHEN is_fallback THEN 1 END) as fallbacks
      FROM ai_telemetry
      WHERE lead_id IN (
-       SELECT id FROM leads WHERE deleted_at IS NULL AND agent_id IN (
+       SELECT id FROM leads WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE} AND agent_id IN (
          SELECT id FROM agents WHERE account_id = $1
        )
      )
@@ -110,7 +111,7 @@ async function checkLeadsWaiting24h(accountId: string): Promise<number> {
   const result = await query(
     `SELECT id, name, phone, last_user_message_at
      FROM leads
-     WHERE deleted_at IS NULL
+     WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE}
        AND agent_id IN (SELECT id FROM agents WHERE account_id = $1)
        AND lead_state IN ('engaged', 'qualified')
        AND last_user_message_at < NOW() - INTERVAL '24 hours'
@@ -139,7 +140,7 @@ async function checkLowConfidencePattern(accountId: string): Promise<number> {
     `SELECT lead_id, COUNT(*) as low_count
      FROM ai_telemetry
      WHERE lead_id IN (
-       SELECT id FROM leads WHERE deleted_at IS NULL AND agent_id IN (
+       SELECT id FROM leads WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE} AND agent_id IN (
          SELECT id FROM agents WHERE account_id = $1
        )
      )
@@ -169,7 +170,7 @@ async function checkStuckConversations(accountId: string): Promise<number> {
   const result = await query(
     `SELECT id, name, phone, updated_at
      FROM leads
-     WHERE deleted_at IS NULL
+     WHERE deleted_at IS NULL ${EXCLUDE_DEMO_BARE}
        AND agent_id IN (SELECT id FROM agents WHERE account_id = $1)
        AND lead_state IN ('engaged', 'qualified', 'thinking')
        AND updated_at < NOW() - INTERVAL '48 hours'

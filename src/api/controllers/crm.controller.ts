@@ -25,6 +25,7 @@ import {
   emitOverviewRefresh,
 } from '../../realtime/emitter.js';
 import { logAudit } from '../../services/audit.service.js';
+import { EXCLUDE_DEMO } from '../../utils/query-helpers.js';
 
 // ============================================================================
 // Helpers
@@ -49,6 +50,7 @@ function toLeadDTO(row: Record<string, unknown>) {
     status:     row.status,
     lead_state: row.lead_state ?? 'new',
     lead_value: row.lead_value != null ? parseFloat(row.lead_value as string) : null,
+    is_demo:    row.is_demo === true,
     created_at: row.created_at,
     agent_id:   row.agent_id ?? '00000000-0000-0000-0000-000000000001',
   };
@@ -75,6 +77,7 @@ function toConversationDTO(row: Record<string, unknown>) {
     unreadCount:   Number(row.unread_count ?? 0),
     channel:       (row.channel as string) === 'telegram' ? 'whatsapp' : 'whatsapp',
     aiStage:       (row.ai_stage as string | null) ?? 'qualifying',
+    isDemo:        row.is_demo === true,
   };
 }
 
@@ -132,7 +135,7 @@ export async function getLeads(req: AuthenticatedRequest, res: Response): Promis
     ),
     query<Record<string, unknown>>(
       `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status,
-              l.lead_state, l.lead_value, l.created_at,
+              l.lead_state, l.lead_value, l.is_demo, l.created_at,
               COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
@@ -404,7 +407,8 @@ const CONV_SELECT = `
     c.last_message,
     c.last_message_at,
     l.name as lead_name,
-    l.phone as lead_phone
+    l.phone as lead_phone,
+    COALESCE(l.is_demo, false) as is_demo
   FROM conversations c
   JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
   LEFT JOIN agents a ON l.agent_id = a.id
@@ -680,6 +684,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE l.status = 'booked'
          AND l.deleted_at IS NULL
+         ${EXCLUDE_DEMO}
          AND l.booked_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY DATE(l.booked_at)
@@ -692,7 +697,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
       `SELECT l.status, COUNT(*) as count
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY l.status`,
       [aid],
     ),
@@ -702,7 +707,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
       `SELECT COUNT(*) as total,
               COUNT(*) FILTER (WHERE COALESCE(human_takeover, false)) as takeovers
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
@@ -713,7 +718,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
     query<{ id: string; event_type: string; metadata: Record<string, unknown>; created_at: string }>(
       `SELECT an.id, an.event_type, an.metadata, an.created_at
        FROM analytics an
-       LEFT JOIN leads l ON an.lead_id = l.id AND l.deleted_at IS NULL
+       LEFT JOIN leads l ON an.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE an.created_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1 OR an.lead_id IS NULL)
@@ -809,16 +814,16 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     }>(
       `SELECT
          (SELECT COUNT(*) FROM leads l LEFT JOIN agents a ON l.agent_id = a.id
-          WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)) AS total_leads,
-         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
+          WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND ($1::uuid IS NULL OR a.account_id = $1)) AS total_leads,
+         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE c.status = 'active'
             AND ($1::uuid IS NULL OR a.account_id = $1)) AS active_conversations,
-         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE m.created_at > NOW() - $2::interval
             AND ($1::uuid IS NULL OR a.account_id = $1)) AS messages_count,
-         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE m.role = 'bot'
             AND m.created_at > NOW() - $2::interval
@@ -841,7 +846,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
          COUNT(*) AS total_telemetry,
          COUNT(*) FILTER (WHERE COALESCE(t.is_fallback, false)) AS fallback_count
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
@@ -853,7 +858,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
       `SELECT l.status, COUNT(*) AS count
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY l.status
        ORDER BY CASE l.status
          WHEN 'new' THEN 1
@@ -872,7 +877,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ date: string; count: string }>(
       `SELECT DATE(m.created_at)::text AS date, COUNT(*) AS count
        FROM messages m
-       JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
+       JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE m.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)
@@ -885,7 +890,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ intent: string; count: string }>(
       `SELECT COALESCE(t.detected_intent, 'unknown') AS intent, COUNT(*) AS count
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)
@@ -898,7 +903,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ channel: string; count: string }>(
       `SELECT COALESCE(c.channel, 'whatsapp') AS channel, COUNT(*) AS count
        FROM conversations c
-       JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
+       JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY c.channel`,
@@ -1004,11 +1009,11 @@ export async function getSettings(req: AuthenticatedRequest, res: Response): Pro
   if (!settingsRow) {
     // Auto-create default settings
     await query(
-      `INSERT INTO settings (account_id, profile, behavior) VALUES ($1, '{}', '{}') ON CONFLICT DO NOTHING`,
+      `INSERT INTO settings (account_id, profile, behavior) VALUES ($1, '{"activation_status":"none"}', '{}') ON CONFLICT DO NOTHING`,
       [aid],
     );
     res.json({
-      profile:     { id: aid, companyName: '', ownerName: '', email: '', phone: '', timezone: 'Asia/Jerusalem' },
+      profile:     { id: aid, companyName: '', ownerName: '', email: '', phone: '', timezone: 'Asia/Jerusalem', activation_status: 'none' },
       behavior:    { tone: 'friendly', strictness: 50, systemPrompt: '' },
       knowledge:   [],
       lastSavedAt: new Date().toISOString(),

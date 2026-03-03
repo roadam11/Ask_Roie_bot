@@ -23,7 +23,7 @@ import {
   onLeadStateChange,
 } from '../../services/follow-up-decision.service.js';
 import type { Lead, UpdateLeadInput, LeadState } from '../../types/index.js';
-import { queryOne } from '../../database/connection.js';
+import { query, queryOne } from '../../database/connection.js';
 import { getWebSocketServer } from '../../realtime/ws-server.js';
 import {
   emitLeadCreated,
@@ -227,6 +227,24 @@ async function processMessage(
       logger.info('New lead created from WhatsApp', {
         leadId: lead.id,
         name: contactName,
+      });
+    }
+
+    // Activation: mark real_lead status (monotonic, never downgrade)
+    try {
+      if (!lead.is_demo) {
+        const tenantAccountId = await getAccountIdByLeadId(lead.id);
+        if (tenantAccountId) {
+          await query(
+            `UPDATE settings SET profile = profile || '{"activation_status":"real_lead"}'::jsonb
+             WHERE account_id = $1 AND profile->>'activation_status' != 'real_lead'`,
+            [tenantAccountId],
+          );
+        }
+      }
+    } catch (activationErr) {
+      logger.error('[ACTIVATION] Status update failed in WhatsApp handler', {
+        error: (activationErr as Error).message,
       });
     }
 

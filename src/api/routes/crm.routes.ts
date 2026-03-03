@@ -22,6 +22,7 @@ import {
   uploadKnowledgeDocumentSchema,
 } from '../schemas/crm.schema.js';
 import * as CRM from '../controllers/crm.controller.js';
+import * as Demo from '../controllers/demo.controller.js';
 
 const router = Router();
 
@@ -60,5 +61,9 @@ router.patch('/settings',   writeRateLimiter, validateBody(updateSettingsSchema)
 // Knowledge base — multipart upload
 router.post('/settings/knowledge',        writeRateLimiter, validateBody(uploadKnowledgeDocumentSchema), asyncHandler(CRM.uploadKnowledgeDocument));
 router.delete('/settings/knowledge/:id',  writeRateLimiter, asyncHandler(CRM.deleteKnowledgeDocument));
+
+// ── Demo ─────────────────────────────────────────────────────────────────────
+
+router.post('/demo/simulate-lead', writeRateLimiter, asyncHandler(Demo.simulateLead));
 
 export default router;

@@ -6,6 +6,7 @@ import { Response } from 'express';
 import { query, queryOne } from '../../database/connection.js';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { calculateExpectedRevenue, calculatePipelineVelocity } from '../../services/analytics.service.js';
+import { EXCLUDE_DEMO } from '../../utils/query-helpers.js';
 
 // Conversion Analysis
 export async function getConversionAnalysis(req: AuthenticatedRequest, res: Response) {
@@ -26,7 +27,7 @@ export async function getConversionAnalysis(req: AuthenticatedRequest, res: Resp
            COUNT(*) FILTER (WHERE status = 'booked') as booked,
            ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'booked') / NULLIF(COUNT(*), 0), 2) as rate
     FROM leads l
-    WHERE l.deleted_at IS NULL
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO}
       AND ($1::TIMESTAMP IS NULL OR created_at >= $1)
       AND ($2::TIMESTAMP IS NULL OR created_at <= $2)
       AND ($3::UUID IS NULL OR EXISTS (SELECT 1 FROM agents a WHERE a.id = l.agent_id AND a.account_id = $3))
@@ -52,7 +53,7 @@ export async function getConversionTrends(req: AuthenticatedRequest, res: Respon
            COUNT(*) FILTER (WHERE status = 'booked') as booked,
            ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'booked') / NULLIF(COUNT(*), 0), 2) as rate
     FROM leads l
-    WHERE l.deleted_at IS NULL
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO}
       AND created_at >= COALESCE($1::TIMESTAMP, NOW() - INTERVAL '90 days') AND created_at <= COALESCE($2::TIMESTAMP, NOW())
       AND ($3::UUID IS NULL OR EXISTS (SELECT 1 FROM agents a WHERE a.id = l.agent_id AND a.account_id = $3))
     GROUP BY 1 ORDER BY 1
@@ -71,7 +72,7 @@ export async function getFunnelAnalysis(req: AuthenticatedRequest, res: Response
     SELECT status, COUNT(*) as cnt,
            ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600)::NUMERIC, 1) as avg_hours
     FROM leads l
-    WHERE l.deleted_at IS NULL
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO}
       AND ($1::TIMESTAMP IS NULL OR created_at >= $1) AND ($2::TIMESTAMP IS NULL OR created_at <= $2)
       AND ($3::UUID IS NULL OR EXISTS (SELECT 1 FROM agents a WHERE a.id = l.agent_id AND a.account_id = $3))
     GROUP BY status
@@ -96,7 +97,7 @@ export async function getBottlenecks(req: AuthenticatedRequest, res: Response) {
   const bottleneckResult = await query(`
     SELECT l.status, COUNT(*) as cnt FROM leads l
     LEFT JOIN agents a ON l.agent_id = a.id
-    WHERE l.deleted_at IS NULL AND l.created_at > NOW() - INTERVAL '30 days'
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY l.status
   `, [accountId || null]);
@@ -128,7 +129,7 @@ export async function getAIPerformance(req: AuthenticatedRequest, res: Response)
   const intentsResult = await query(`
     SELECT t.detected_intent, COUNT(*) as cnt, ROUND(AVG(t.intent_confidence) * 100, 1) as conf
     FROM ai_telemetry t
-    JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
+    JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE t.detected_intent IS NOT NULL AND t.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
@@ -152,7 +153,7 @@ export async function getConfidenceAnalysis(req: AuthenticatedRequest, res: Resp
   const confResult = await query(`
     SELECT FLOOR(t.intent_confidence * 10) / 10 as bucket, COUNT(*) as cnt,
            COUNT(*) FILTER (WHERE l.status = 'booked') as booked
-    FROM ai_telemetry t JOIN leads l ON l.id = t.lead_id AND l.deleted_at IS NULL
+    FROM ai_telemetry t JOIN leads l ON l.id = t.lead_id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE t.intent_confidence IS NOT NULL AND t.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
@@ -169,7 +170,7 @@ export async function getAIHumanComparison(req: AuthenticatedRequest, res: Respo
            COUNT(DISTINCT l.id) as leads, COUNT(DISTINCT l.id) FILTER (WHERE l.status = 'booked') as booked
     FROM leads l LEFT JOIN ai_telemetry t ON t.lead_id = l.id
     LEFT JOIN agents a ON l.agent_id = a.id
-    WHERE l.deleted_at IS NULL AND l.created_at > NOW() - INTERVAL '30 days'
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY CASE WHEN BOOL_OR(t.human_takeover) THEN 'human' ELSE 'ai' END
   `, [accountId || null]);
@@ -186,13 +187,13 @@ export async function getRevenueIntelligence(req: AuthenticatedRequest, res: Res
   const current = await queryOne(`
     SELECT SUM(lead_value) FILTER (WHERE status = 'booked') as closed,
            SUM(lead_value) FILTER (WHERE status NOT IN ('booked', 'lost')) as pipeline
-    FROM leads l WHERE l.deleted_at IS NULL AND ($1::UUID IS NULL OR EXISTS (SELECT 1 FROM agents a WHERE a.id = l.agent_id AND a.account_id = $1))
+    FROM leads l WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND ($1::UUID IS NULL OR EXISTS (SELECT 1 FROM agents a WHERE a.id = l.agent_id AND a.account_id = $1))
   `, [accountId || null]);
 
   const leadsResult = await query(`
     SELECT l.id, l.status, l.lead_state, l.lead_value, l.created_at FROM leads l
     LEFT JOIN agents a ON l.agent_id = a.id
-    WHERE l.deleted_at IS NULL AND l.status NOT IN ('booked', 'lost')
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.status NOT IN ('booked', 'lost')
       AND ($1::UUID IS NULL OR a.account_id = $1)
   `, [accountId || null]);
   const activeLeads = leadsResult.rows;
@@ -214,7 +215,7 @@ export async function getRevenueCohorts(req: AuthenticatedRequest, res: Response
            SUM(l.lead_value) FILTER (WHERE l.status = 'booked') as revenue
     FROM leads l
     LEFT JOIN agents a ON l.agent_id = a.id
-    WHERE l.deleted_at IS NULL AND l.created_at > NOW() - INTERVAL '12 months'
+    WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.created_at > NOW() - INTERVAL '12 months'
       AND ($1::UUID IS NULL OR a.account_id = $1)
     GROUP BY 1 ORDER BY 1
   `, [accountId || null]);
