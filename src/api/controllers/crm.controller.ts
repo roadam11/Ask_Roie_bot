@@ -24,6 +24,7 @@ import {
   emitConversationUpdated,
   emitOverviewRefresh,
 } from '../../realtime/emitter.js';
+import { logAudit } from '../../services/audit.service.js';
 
 // ============================================================================
 // Helpers
@@ -254,6 +255,13 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
 
   if (sets.length === 1) { res.status(400).json({ code: 'NO_FIELDS', message: 'No fields to update' }); return; }
 
+  // Capture before state for audit
+  const beforeRow = await queryOne<Record<string, unknown>>(
+    `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id
+     FROM leads l WHERE l.id = $1`,
+    [id],
+  );
+
   params.push(id, aid);
 
   const row = await queryOne<Record<string, unknown>>(
@@ -267,6 +275,17 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
 
   if (!row) { res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' }); return; }
   res.json(toLeadDTO(row));
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'lead.updated',
+    entityType: 'lead',
+    entityId: id,
+    beforeData: beforeRow ?? undefined,
+    afterData: row,
+  });
 
   // Realtime side-effect — fire and forget
   try {
@@ -288,6 +307,14 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
   if (!isValidUUID(id)) { res.status(400).json({ code: 'INVALID_ID', message: 'Invalid lead ID' }); return; }
 
   const aid = accountId(req);
+
+  // Capture before state for audit
+  const beforeRow = await queryOne<Record<string, unknown>>(
+    `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id
+     FROM leads l WHERE l.id = $1`,
+    [id],
+  );
+
   const result = await queryOne<{ id: string }>(
     `DELETE FROM leads l
      USING agents a
@@ -298,6 +325,16 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
 
   if (!result) { res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' }); return; }
   res.status(204).end();
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'lead.deleted',
+    entityType: 'lead',
+    entityId: id,
+    beforeData: beforeRow ?? undefined,
+  });
 
   // Realtime side-effect — fire and forget
   try {
@@ -497,6 +534,16 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
 
   res.status(201).json(toMessageDTO(msg, id));
 
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'message.created',
+    entityType: 'message',
+    entityId: msg.id as string,
+    afterData: { content: text.trim(), conversationId: id },
+  });
+
   // Realtime side-effect — fire and forget
   try {
     const wss = getWebSocketServer();
@@ -525,6 +572,13 @@ export async function updateConversationStatus(req: AuthenticatedRequest, res: R
   }
 
   const aid = accountId(req);
+
+  // Capture before state for audit
+  const beforeConv = await queryOne<Record<string, unknown>>(
+    `SELECT id, status, lead_id FROM conversations WHERE id = $1`,
+    [id],
+  );
+
   await query(
     `UPDATE conversations c
      SET status = $1
@@ -540,6 +594,17 @@ export async function updateConversationStatus(req: AuthenticatedRequest, res: R
   );
   if (!row) { res.status(404).json({ code: 'NOT_FOUND', message: 'Conversation not found' }); return; }
   res.json(toConversationDTO(row));
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'conversation.updated',
+    entityType: 'conversation',
+    entityId: id,
+    beforeData: beforeConv ?? undefined,
+    afterData: { status: dbStatus },
+  });
 
   // Realtime side-effect — fire and forget
   try {
@@ -930,6 +995,12 @@ export async function updateSettings(req: AuthenticatedRequest, res: Response): 
   const aid  = accountId(req);
   const body = req.body as { profile?: Record<string, unknown>; behavior?: Record<string, unknown> };
 
+  // Capture before state for audit
+  const beforeSettings = await queryOne<{ profile: unknown; behavior: unknown }>(
+    `SELECT profile, behavior FROM settings WHERE account_id = $1`,
+    [aid],
+  );
+
   const sets: string[]  = ['last_saved_at = NOW()', 'updated_at = NOW()'];
   const params: unknown[] = [];
   let pi = 1;
@@ -960,6 +1031,17 @@ export async function updateSettings(req: AuthenticatedRequest, res: Response): 
   ).catch(async () => {
     // Simpler upsert fallback
     await query(`UPDATE settings SET ${sets.join(', ')} WHERE account_id = $${pi}`, params);
+  });
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'settings.updated',
+    entityType: 'settings',
+    entityId: aid,
+    beforeData: beforeSettings ? { profile: beforeSettings.profile, behavior: beforeSettings.behavior } as Record<string, unknown> : undefined,
+    afterData: { profile: body.profile, behavior: body.behavior },
   });
 
   // Fetch and return updated settings
@@ -999,6 +1081,16 @@ export async function uploadKnowledgeDocument(req: AuthenticatedRequest, res: Re
     uploadedAt: doc.uploaded_at,
     status:     doc.status,
   });
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'knowledge.created',
+    entityType: 'knowledge',
+    entityId: doc.id,
+    afterData: { name: doc.name, type: doc.type, sizeBytes: parseInt(doc.size_bytes, 10) },
+  });
 }
 
 /**
@@ -1009,6 +1101,13 @@ export async function deleteKnowledgeDocument(req: AuthenticatedRequest, res: Re
   if (!isValidUUID(id)) { res.status(400).json({ code: 'INVALID_ID', message: 'Invalid document ID' }); return; }
 
   const aid = accountId(req);
+
+  // Capture before state for audit
+  const beforeDoc = await queryOne<Record<string, unknown>>(
+    `SELECT id, name, type, size_bytes, status FROM knowledge_documents WHERE id = $1 AND account_id = $2`,
+    [id, aid],
+  );
+
   const result = await queryOne<{ id: string }>(
     `DELETE FROM knowledge_documents WHERE id = $1 AND account_id = $2 RETURNING id`,
     [id, aid],
@@ -1016,6 +1115,16 @@ export async function deleteKnowledgeDocument(req: AuthenticatedRequest, res: Re
 
   if (!result) { res.status(404).json({ code: 'NOT_FOUND', message: 'Document not found' }); return; }
   res.status(204).end();
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'knowledge.deleted',
+    entityType: 'knowledge',
+    entityId: id,
+    beforeData: beforeDoc ?? undefined,
+  });
 }
 
 logger.debug('CRM controller loaded');

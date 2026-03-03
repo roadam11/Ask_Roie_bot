@@ -27,6 +27,7 @@ import { authRateLimiter } from '../middleware/rateLimit.middleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { loginSchema, changePasswordSchema } from '../schemas/auth.schema.js';
 import logger from '../../utils/logger.js';
+import { logAudit } from '../../services/audit.service.js';
 
 const router = Router();
 
@@ -119,6 +120,16 @@ router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Re
     );
 
     logger.info('User logged in', { userId: user.id, email: user.email });
+
+    // Audit — fire and forget
+    logAudit({
+      accountId: user.account_id,
+      userId: user.id,
+      action: 'auth.login',
+      entityType: 'user',
+      entityId: user.id,
+      metadata: { ip: req.ip, userAgent: req.get('user-agent') },
+    });
 
     // Return access token in response body
     res.json({
