@@ -61,7 +61,7 @@ export async function calculatePipelineVelocity(accountId: string | null) {
         ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400
       ) as median_days
     FROM leads
-    WHERE status = 'booked' AND created_at > NOW() - INTERVAL '90 days'
+    WHERE deleted_at IS NULL AND status = 'booked' AND created_at > NOW() - INTERVAL '90 days'
       AND ($1::UUID IS NULL OR EXISTS (
         SELECT 1 FROM agents a WHERE a.id = agent_id AND a.account_id = $1
       ))

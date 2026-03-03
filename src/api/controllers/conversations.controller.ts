@@ -37,7 +37,7 @@ export async function searchConversations(req: AuthenticatedRequest, res: Respon
     SELECT cs.*, l.name as lead_name, l.phone as lead_phone,
            LEFT(cs.content_text, 200) as snippet
     FROM conversation_search cs
-    JOIN leads l ON l.id = cs.lead_id
+    JOIN leads l ON l.id = cs.lead_id AND l.deleted_at IS NULL
     ${where}
     ORDER BY cs.last_message_at DESC
     LIMIT $${idx++} OFFSET $${idx}
@@ -59,7 +59,7 @@ export async function getRecentConversations(req: AuthenticatedRequest, res: Res
   const accountId = req.user?.accountId;
   const result = await query(`
     SELECT c.id, c.lead_id, l.name, l.phone, c.outcome, c.started_at, c.message_count
-    FROM conversations c JOIN leads l ON l.id = c.lead_id
+    FROM conversations c JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE ($1::UUID IS NULL OR a.account_id = $1)
     ORDER BY c.started_at DESC LIMIT $2
@@ -75,7 +75,7 @@ export async function getConversationById(req: AuthenticatedRequest, res: Respon
 
   const conv = await queryOne(`
     SELECT c.*, l.name, l.phone, l.status as lead_status, l.subject
-    FROM conversations c JOIN leads l ON l.id = c.lead_id
+    FROM conversations c JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)
   `, [id, accountId || null]);
@@ -103,7 +103,7 @@ export async function getConversationTimeline(req: AuthenticatedRequest, res: Re
   // Verify conversation belongs to this tenant
   const conv = await queryOne<{ lead_id: string }>(
     `SELECT c.lead_id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
     [id, accountId || null],
@@ -129,7 +129,7 @@ export async function getDecisionPath(req: AuthenticatedRequest, res: Response) 
   // Verify conversation belongs to this tenant
   const conv = await queryOne<{ id: string }>(
     `SELECT c.id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
     [id, accountId || null],
@@ -157,7 +157,7 @@ export async function flagConversation(req: AuthenticatedRequest, res: Response)
   // Verify conversation belongs to this tenant
   const conv = await queryOne<{ id: string }>(
     `SELECT c.id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
     [id, accountId || null],
@@ -179,7 +179,7 @@ export async function getConversationFlags(req: AuthenticatedRequest, res: Respo
   // Verify conversation belongs to this tenant
   const conv = await queryOne<{ id: string }>(
     `SELECT c.id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
     [id, accountId || null],
@@ -201,7 +201,7 @@ export async function getQAMetrics(req: AuthenticatedRequest, res: Response) {
            COUNT(*) FILTER (WHERE qf.status = 'resolved') as resolved
     FROM qa_flags qf
     JOIN conversations c ON c.id = qf.conversation_id
-    JOIN leads l ON l.id = c.lead_id
+    JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE qf.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
@@ -210,7 +210,7 @@ export async function getQAMetrics(req: AuthenticatedRequest, res: Response) {
   const result = await query(`
     SELECT qf.flag_type, COUNT(*) as cnt FROM qa_flags qf
     JOIN conversations c ON c.id = qf.conversation_id
-    JOIN leads l ON l.id = c.lead_id
+    JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE qf.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
@@ -242,7 +242,7 @@ export async function getQAFlags(req: AuthenticatedRequest, res: Response) {
   const countResult = await queryOne<{ total: string }>(
     `SELECT COUNT(*) as total FROM qa_flags qf
      JOIN conversations c ON c.id = qf.conversation_id
-     JOIN leads l ON l.id = c.lead_id
+     JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      ${where}`,
     params,
@@ -253,7 +253,7 @@ export async function getQAFlags(req: AuthenticatedRequest, res: Response) {
   const result = await query(`
     SELECT qf.*, l.name as lead_name FROM qa_flags qf
     JOIN conversations c ON c.id = qf.conversation_id
-    JOIN leads l ON l.id = c.lead_id
+    JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     ${where} ORDER BY qf.created_at DESC LIMIT $${idx++} OFFSET $${idx}
   `, params);
@@ -272,7 +272,7 @@ export async function updateQAFlag(req: AuthenticatedRequest, res: Response) {
   const existing = await queryOne<{ id: string }>(
     `SELECT qf.id FROM qa_flags qf
      JOIN conversations c ON c.id = qf.conversation_id
-     JOIN leads l ON l.id = c.lead_id
+     JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE qf.id = $1 AND ($2::UUID IS NULL OR a.account_id = $2)`,
     [flagId, accountId || null],
@@ -295,7 +295,7 @@ export async function getFailurePatterns(req: AuthenticatedRequest, res: Respons
   const result = await query(`
     SELECT qf.flag_type, COUNT(*) as cnt FROM qa_flags qf
     JOIN conversations c ON c.id = qf.conversation_id
-    JOIN leads l ON l.id = c.lead_id
+    JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE qf.created_at > NOW() - INTERVAL '30 days'
       AND ($1::UUID IS NULL OR a.account_id = $1)
@@ -312,7 +312,7 @@ export async function getABTestResults(req: AuthenticatedRequest, res: Response)
     SELECT pv.*, COUNT(DISTINCT t.conversation_id) as conversations, AVG(t.intent_confidence) as avg_conf
     FROM prompt_versions pv
     LEFT JOIN ai_telemetry t ON t.prompt_version_id = pv.id
-    LEFT JOIN leads l ON t.lead_id = l.id
+    LEFT JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE ($1::UUID IS NULL OR a.account_id = $1 OR t.id IS NULL)
     GROUP BY pv.id ORDER BY pv.version_number DESC LIMIT 10
@@ -326,7 +326,7 @@ export async function exportConversations(req: AuthenticatedRequest, res: Respon
   const accountId = req.user?.accountId;
   const result = await query(`
     SELECT c.id, l.name, c.outcome, c.started_at FROM conversations c
-    JOIN leads l ON l.id = c.lead_id
+    JOIN leads l ON l.id = c.lead_id AND l.deleted_at IS NULL
     LEFT JOIN agents a ON l.agent_id = a.id
     WHERE ($1::UUID IS NULL OR a.account_id = $1)
     ORDER BY c.started_at DESC LIMIT 100

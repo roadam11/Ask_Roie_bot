@@ -35,7 +35,8 @@ router.get('/leads/cursor',  asyncHandler(CRM.getLeadsCursor));
 router.get('/leads',         asyncHandler(CRM.getLeads));
 router.get('/leads/:id',     asyncHandler(CRM.getLeadById));
 router.patch('/leads/:id',   writeRateLimiter, validateBody(updateLeadSchema), asyncHandler(CRM.updateLead));
-router.delete('/leads/:id',  writeRateLimiter, asyncHandler(CRM.deleteLead));
+router.delete('/leads/:id',         writeRateLimiter, asyncHandler(CRM.deleteLead));
+router.patch('/leads/:id/restore',  writeRateLimiter, asyncHandler(CRM.restoreLead));
 
 // ── Conversations ──────────────────────────────────────────────────────────────
 

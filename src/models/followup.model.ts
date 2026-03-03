@@ -403,7 +403,7 @@ export async function findDueFollowUps(limit = 100): Promise<FollowUp[]> {
   const sql = `
     SELECT f.*
     FROM followups f
-    INNER JOIN leads l ON f.lead_id = l.id
+    INNER JOIN leads l ON f.lead_id = l.id AND l.deleted_at IS NULL
     WHERE f.status = 'pending'
       AND f.scheduled_for <= NOW()
       AND l.opted_out = FALSE

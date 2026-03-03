@@ -113,7 +113,7 @@ export async function getLeads(req: AuthenticatedRequest, res: Response): Promis
   const level   = req.query.level   as string | undefined;
   const name    = req.query.name    as string | undefined;
 
-  const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)'];
+  const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)', 'l.deleted_at IS NULL'];
   const params: unknown[]    = [aid];
   let   pi = 2;
 
@@ -162,7 +162,7 @@ export async function getLeadsCursor(req: AuthenticatedRequest, res: Response): 
   const level  = req.query.level  as string | undefined;
   const name   = req.query.name   as string | undefined;
 
-  const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)'];
+  const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)', 'l.deleted_at IS NULL'];
   const params: unknown[]    = [aid];
   let   pi = 2;
 
@@ -223,7 +223,7 @@ export async function getLeadById(req: AuthenticatedRequest, res: Response): Pro
             COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id
      FROM leads l
      LEFT JOIN agents a ON l.agent_id = a.id
-     WHERE l.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
+     WHERE l.id = $1 AND l.deleted_at IS NULL AND ($2::uuid IS NULL OR a.account_id = $2)`,
     [id, aid],
   );
 
@@ -258,7 +258,7 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
   // Capture before state for audit
   const beforeRow = await queryOne<Record<string, unknown>>(
     `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id
-     FROM leads l WHERE l.id = $1`,
+     FROM leads l WHERE l.id = $1 AND l.deleted_at IS NULL`,
     [id],
   );
 
@@ -268,7 +268,7 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
     `UPDATE leads l
      SET ${sets.join(', ')}
      FROM agents a
-     WHERE l.id = $${pi} AND l.agent_id = a.id AND ($${pi + 1}::uuid IS NULL OR a.account_id = $${pi + 1})
+     WHERE l.id = $${pi} AND l.agent_id = a.id AND l.deleted_at IS NULL AND ($${pi + 1}::uuid IS NULL OR a.account_id = $${pi + 1})
      RETURNING l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id`,
     params,
   );
@@ -311,14 +311,15 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
   // Capture before state for audit
   const beforeRow = await queryOne<Record<string, unknown>>(
     `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id
-     FROM leads l WHERE l.id = $1`,
+     FROM leads l WHERE l.id = $1 AND l.deleted_at IS NULL`,
     [id],
   );
 
   const result = await queryOne<{ id: string }>(
-    `DELETE FROM leads l
-     USING agents a
-     WHERE l.id = $1 AND l.agent_id = a.id AND ($2::uuid IS NULL OR a.account_id = $2)
+    `UPDATE leads l
+     SET deleted_at = NOW()
+     FROM agents a
+     WHERE l.id = $1 AND l.agent_id = a.id AND l.deleted_at IS NULL AND ($2::uuid IS NULL OR a.account_id = $2)
      RETURNING l.id`,
     [id, aid],
   );
@@ -330,10 +331,53 @@ export async function deleteLead(req: AuthenticatedRequest, res: Response): Prom
   logAudit({
     accountId: aid,
     userId: req.user?.id,
-    action: 'lead.deleted',
+    action: 'lead.soft_deleted',
     entityType: 'lead',
     entityId: id,
     beforeData: beforeRow ?? undefined,
+  });
+
+  // Realtime side-effect — fire and forget
+  try {
+    const wss = getWebSocketServer();
+    if (wss) {
+      emitOverviewRefresh(wss);
+    }
+  } catch (emitError) {
+    logger.warn('Realtime emit failed', { error: emitError, event: 'overview:refresh' });
+  }
+}
+
+/**
+ * PATCH /api/leads/:id/restore
+ * Restores a soft-deleted lead
+ */
+export async function restoreLead(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  if (!isValidUUID(id)) { res.status(400).json({ code: 'INVALID_ID', message: 'Invalid lead ID' }); return; }
+
+  const aid = accountId(req);
+
+  const row = await queryOne<Record<string, unknown>>(
+    `UPDATE leads l
+     SET deleted_at = NULL
+     FROM agents a
+     WHERE l.id = $1 AND l.agent_id = a.id AND l.deleted_at IS NOT NULL AND ($2::uuid IS NULL OR a.account_id = $2)
+     RETURNING l.id, l.phone, l.name, l.subjects, l.level, l.status, l.lead_state, l.lead_value, l.created_at, l.agent_id`,
+    [id, aid],
+  );
+
+  if (!row) { res.status(404).json({ code: 'NOT_FOUND', message: 'Deleted lead not found' }); return; }
+  res.json(toLeadDTO(row));
+
+  // Audit — fire and forget
+  logAudit({
+    accountId: aid,
+    userId: req.user?.id,
+    action: 'lead.restored',
+    entityType: 'lead',
+    entityId: id,
+    afterData: row,
   });
 
   // Realtime side-effect — fire and forget
@@ -362,7 +406,7 @@ const CONV_SELECT = `
     l.name as lead_name,
     l.phone as lead_phone
   FROM conversations c
-  JOIN leads l ON c.lead_id = l.id
+  JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
   LEFT JOIN agents a ON l.agent_id = a.id
 `;
 
@@ -414,7 +458,7 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
   const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
     `SELECT c.lead_id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
     [id, aid],
@@ -448,7 +492,7 @@ export async function getMessagesCursor(req: AuthenticatedRequest, res: Response
   const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
     `SELECT c.lead_id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
     [id, aid],
@@ -510,7 +554,7 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
   const aid = accountId(req);
   const conv = await queryOne<{ lead_id: string }>(
     `SELECT c.lead_id FROM conversations c
-     JOIN leads l ON c.lead_id = l.id
+     JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE c.id = $1 AND ($2::uuid IS NULL OR a.account_id = $2)`,
     [id, aid],
@@ -584,7 +628,7 @@ export async function updateConversationStatus(req: AuthenticatedRequest, res: R
      SET status = $1
      FROM leads l
      LEFT JOIN agents a ON l.agent_id = a.id
-     WHERE c.id = $2 AND c.lead_id = l.id AND ($3::uuid IS NULL OR a.account_id = $3)`,
+     WHERE c.id = $2 AND c.lead_id = l.id AND l.deleted_at IS NULL AND ($3::uuid IS NULL OR a.account_id = $3)`,
     [dbStatus, id, aid],
   );
 
@@ -635,6 +679,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE l.status = 'booked'
+         AND l.deleted_at IS NULL
          AND l.booked_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY DATE(l.booked_at)
@@ -647,7 +692,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
       `SELECT l.status, COUNT(*) as count
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY l.status`,
       [aid],
     ),
@@ -657,7 +702,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
       `SELECT COUNT(*) as total,
               COUNT(*) FILTER (WHERE COALESCE(human_takeover, false)) as takeovers
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
@@ -668,7 +713,7 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
     query<{ id: string; event_type: string; metadata: Record<string, unknown>; created_at: string }>(
       `SELECT an.id, an.event_type, an.metadata, an.created_at
        FROM analytics an
-       LEFT JOIN leads l ON an.lead_id = l.id
+       LEFT JOIN leads l ON an.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE an.created_at > NOW() - INTERVAL '7 days'
          AND ($1::uuid IS NULL OR a.account_id = $1 OR an.lead_id IS NULL)
@@ -764,16 +809,16 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     }>(
       `SELECT
          (SELECT COUNT(*) FROM leads l LEFT JOIN agents a ON l.agent_id = a.id
-          WHERE ($1::uuid IS NULL OR a.account_id = $1)) AS total_leads,
-         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id
+          WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)) AS total_leads,
+         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE c.status = 'active'
             AND ($1::uuid IS NULL OR a.account_id = $1)) AS active_conversations,
-         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE m.created_at > NOW() - $2::interval
             AND ($1::uuid IS NULL OR a.account_id = $1)) AS messages_count,
-         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
           LEFT JOIN agents a ON l.agent_id = a.id
           WHERE m.role = 'bot'
             AND m.created_at > NOW() - $2::interval
@@ -796,7 +841,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
          COUNT(*) AS total_telemetry,
          COUNT(*) FILTER (WHERE COALESCE(t.is_fallback, false)) AS fallback_count
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
@@ -808,7 +853,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
       `SELECT l.status, COUNT(*) AS count
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY l.status
        ORDER BY CASE l.status
          WHEN 'new' THEN 1
@@ -827,7 +872,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ date: string; count: string }>(
       `SELECT DATE(m.created_at)::text AS date, COUNT(*) AS count
        FROM messages m
-       JOIN leads l ON m.lead_id = l.id
+       JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE m.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)
@@ -840,7 +885,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ intent: string; count: string }>(
       `SELECT COALESCE(t.detected_intent, 'unknown') AS intent, COUNT(*) AS count
        FROM ai_telemetry t
-       JOIN leads l ON t.lead_id = l.id
+       JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE t.created_at > NOW() - $2::interval
          AND ($1::uuid IS NULL OR a.account_id = $1)
@@ -853,7 +898,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     query<{ channel: string; count: string }>(
       `SELECT COALESCE(c.channel, 'whatsapp') AS channel, COUNT(*) AS count
        FROM conversations c
-       JOIN leads l ON c.lead_id = l.id
+       JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY c.channel`,

@@ -16,7 +16,7 @@ router.get('/lead/:leadId', authenticate, async (req: AuthenticatedRequest, res:
 
   const result = await query(
     `SELECT t.* FROM ai_telemetry t
-     JOIN leads l ON t.lead_id = l.id
+     JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE t.lead_id = $1
        AND ($3::uuid IS NULL OR a.account_id = $3)
@@ -36,7 +36,7 @@ router.get('/conversation/:conversationId/timeline', authenticate, async (req: A
 
   const result = await query(
     `SELECT t.* FROM ai_telemetry t
-     JOIN leads l ON t.lead_id = l.id
+     JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE t.conversation_id = $1
        AND ($2::uuid IS NULL OR a.account_id = $2)
@@ -65,7 +65,7 @@ router.get('/conversation/:conversationId/decision-path', authenticate, async (r
   const result = await query(
     `SELECT t.decision_path, t.entities_extracted, t.reasoning, t.tool_calls, t.created_at
      FROM ai_telemetry t
-     JOIN leads l ON t.lead_id = l.id
+     JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE t.conversation_id = $1
        AND t.decision_path IS NOT NULL
@@ -93,7 +93,7 @@ router.get('/message/:messageId', authenticate, async (req: AuthenticatedRequest
 
   const result = await query(
     `SELECT t.* FROM ai_telemetry t
-     JOIN leads l ON t.lead_id = l.id
+     JOIN leads l ON t.lead_id = l.id AND l.deleted_at IS NULL
      LEFT JOIN agents a ON l.agent_id = a.id
      WHERE t.message_id = $1
        AND ($2::uuid IS NULL OR a.account_id = $2)

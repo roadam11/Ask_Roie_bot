@@ -388,7 +388,7 @@ export async function onLeadStateChange(
   try {
     // Get updated lead
     const lead = await queryOne<Lead>(
-      `SELECT * FROM leads WHERE id = $1`,
+      `SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL`,
       [leadId]
     );
 
@@ -536,7 +536,8 @@ export async function setHumanContacted(leadId: string): Promise<void> {
 export async function findIdleLeads(): Promise<Lead[]> {
   const result = await query<Lead>(
     `SELECT * FROM leads
-     WHERE lead_state = 'engaged'
+     WHERE deleted_at IS NULL
+       AND lead_state = 'engaged'
        AND opted_out = false
        AND needs_human_followup = false
        AND COALESCE(follow_up_count, 0) < $1

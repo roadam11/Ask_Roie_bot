@@ -187,7 +187,7 @@ export async function create(
  * @returns The lead or null if not found
  */
 export async function findById(id: string): Promise<Lead | null> {
-  const sql = 'SELECT * FROM leads WHERE id = $1';
+  const sql = 'SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL';
   const lead = await queryOne<Lead>(sql, [id]);
 
   if (lead) {
@@ -204,7 +204,7 @@ export async function findById(id: string): Promise<Lead | null> {
  * @returns The lead or null if not found
  */
 export async function findByPhone(phone: string): Promise<Lead | null> {
-  const sql = 'SELECT * FROM leads WHERE phone = $1';
+  const sql = 'SELECT * FROM leads WHERE phone = $1 AND deleted_at IS NULL';
   const lead = await queryOne<Lead>(sql, [phone]);
 
   if (lead) {
@@ -356,11 +356,11 @@ export async function update(
  * @returns true if deleted, false if not found
  */
 export async function remove(id: string): Promise<boolean> {
-  const sql = 'DELETE FROM leads WHERE id = $1 RETURNING id';
+  const sql = 'UPDATE leads SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id';
   const result = await query(sql, [id]);
 
   if (result.rowCount && result.rowCount > 0) {
-    logger.info('Lead deleted', { leadId: id });
+    logger.info('Lead soft-deleted', { leadId: id });
     return true;
   }
 
@@ -381,7 +381,7 @@ export async function list(filters?: {
   limit?: number;
   offset?: number;
 }): Promise<Lead[]> {
-  const conditions: string[] = [];
+  const conditions: string[] = ['deleted_at IS NULL'];
   const values: unknown[] = [];
   let paramIndex = 1;
 
@@ -439,7 +439,8 @@ export async function list(filters?: {
 export async function findLeadsNeedingFollowUp(limit = 50): Promise<Lead[]> {
   const sql = `
     SELECT * FROM leads
-    WHERE opted_out = FALSE
+    WHERE deleted_at IS NULL
+      AND opted_out = FALSE
       AND status NOT IN ('booked', 'lost')
       AND last_bot_message_at IS NOT NULL
       AND (last_followup_sent_at IS NULL OR last_followup_sent_at < NOW() - INTERVAL '24 hours')
@@ -465,7 +466,8 @@ export async function findLeadsNeedingFollowUp(limit = 50): Promise<Lead[]> {
 export async function findLeadsApproachingWindowExpiry(): Promise<Lead[]> {
   const sql = `
     SELECT * FROM leads
-    WHERE opted_out = FALSE
+    WHERE deleted_at IS NULL
+      AND opted_out = FALSE
       AND status NOT IN ('booked', 'lost')
       AND last_user_message_at IS NOT NULL
       AND last_user_message_at > NOW() - INTERVAL '24 hours'
@@ -486,7 +488,8 @@ export async function findLeadsApproachingWindowExpiry(): Promise<Lead[]> {
 export async function findLeadsReadyToBook(): Promise<Lead[]> {
   const sql = `
     SELECT * FROM leads
-    WHERE status = 'ready_to_book'
+    WHERE deleted_at IS NULL
+      AND status = 'ready_to_book'
       AND opted_out = FALSE
       AND booking_completed = FALSE
     ORDER BY updated_at DESC
@@ -560,6 +563,7 @@ export async function countByStatus(): Promise<Record<LeadStatusType, number>> {
   const sql = `
     SELECT status, COUNT(*)::int as count
     FROM leads
+    WHERE deleted_at IS NULL
     GROUP BY status
   `;
 

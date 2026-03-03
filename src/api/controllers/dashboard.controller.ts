@@ -77,7 +77,7 @@ export async function getMetrics(
       `SELECT COALESCE(SUM(lead_value), 0) as value
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.status NOT IN ('booked', 'lost')
+       WHERE l.deleted_at IS NULL AND l.status NOT IN ('booked', 'lost')
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
       [accountId || null]
     );
@@ -87,7 +87,7 @@ export async function getMetrics(
       `SELECT COALESCE(SUM(lead_value), 0) as value
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.status = 'booked'
+       WHERE l.deleted_at IS NULL AND l.status = 'booked'
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
       [accountId || null]
     );
@@ -97,7 +97,7 @@ export async function getMetrics(
       `SELECT AVG(EXTRACT(EPOCH FROM (booked_at - created_at)) / 3600) as avg_hours
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.status = 'booked' AND l.booked_at IS NOT NULL
+       WHERE l.deleted_at IS NULL AND l.status = 'booked' AND l.booked_at IS NOT NULL
          AND ($1::uuid IS NULL OR a.account_id = $1)`,
       [accountId || null]
     );
@@ -107,7 +107,7 @@ export async function getMetrics(
       `SELECT status, COUNT(*) as count
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY status`,
       [accountId || null]
     );
@@ -147,7 +147,7 @@ export async function getMetrics(
              AND m.created_at > f.sent_at
          )) as total_responded
        FROM followups f
-       JOIN leads l ON f.lead_id = l.id
+       JOIN leads l ON f.lead_id = l.id AND l.deleted_at IS NULL
        LEFT JOIN agents a ON l.agent_id = a.id
        WHERE ($1::uuid IS NULL OR a.account_id = $1)`,
       [accountId || null]
@@ -206,7 +206,7 @@ export async function getFunnel(
          )) / 3600) as avg_hours
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY status`,
       [accountId || null]
     );
@@ -307,7 +307,7 @@ export async function getAnalytics(
          AVG(l.lead_value) as avg_value
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE ($1::uuid IS NULL OR a.account_id = $1)
+       WHERE l.deleted_at IS NULL AND ($1::uuid IS NULL OR a.account_id = $1)
        GROUP BY ${groupColumn}
        HAVING COUNT(DISTINCT l.id) > 0
        ORDER BY lead_count DESC
@@ -361,7 +361,7 @@ export async function getLeads(
     const hasFollowUp = req.query.hasFollowUp as string;
 
     // Build WHERE conditions
-    const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)'];
+    const conditions: string[] = ['($1::uuid IS NULL OR a.account_id = $1)', 'l.deleted_at IS NULL'];
     const params: (string | null)[] = [accountId || null];
     let paramIndex = 2;
 
@@ -459,7 +459,7 @@ export async function getLeadById(
        FROM leads l
        LEFT JOIN agents ag ON l.agent_id = ag.id
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.id = $1
+       WHERE l.id = $1 AND l.deleted_at IS NULL
          AND ($2::uuid IS NULL OR a.account_id = $2)`,
       [id, accountId || null]
     );
@@ -574,7 +574,7 @@ export async function updateLeadState(
       `UPDATE leads l
        SET ${updates.join(', ')}
        FROM agents a
-       WHERE l.id = $${paramIndex}
+       WHERE l.id = $${paramIndex} AND l.deleted_at IS NULL
          AND l.agent_id = a.id
          AND ($${paramIndex + 1}::uuid IS NULL OR a.account_id = $${paramIndex + 1})
        RETURNING l.*`,
@@ -627,7 +627,7 @@ export async function replyToLead(
        FROM leads l
        LEFT JOIN agents ag ON l.agent_id = ag.id
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.id = $1
+       WHERE l.id = $1 AND l.deleted_at IS NULL
          AND ($2::uuid IS NULL OR a.account_id = $2)`,
       [id, accountId || null]
     );
@@ -713,7 +713,7 @@ export async function getLeadMessages(
       `SELECT l.id
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
-       WHERE l.id = $1
+       WHERE l.id = $1 AND l.deleted_at IS NULL
          AND ($2::uuid IS NULL OR a.account_id = $2)`,
       [id, accountId || null]
     );

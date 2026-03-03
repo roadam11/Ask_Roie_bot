@@ -52,7 +52,7 @@ export async function loadSettingsForLead(leadId: string): Promise<AccountSettin
     `SELECT s.profile, s.behavior
      FROM settings s
      JOIN agents a ON a.account_id = s.account_id
-     JOIN leads l ON l.agent_id = a.id
+     JOIN leads l ON l.agent_id = a.id AND l.deleted_at IS NULL
      WHERE l.id = $1
      LIMIT 1`,
     [leadId],
