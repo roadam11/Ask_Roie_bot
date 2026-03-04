@@ -154,8 +154,6 @@ export async function runScenario(
       };
     }
 
-    const inputMessage = scenario.input;
-
     // Tool executor that records calls but skips side effects
     const toolCallNames: string[] = [];
     const toolExecutor: ToolExecutor = async (toolCall) => {
@@ -179,12 +177,37 @@ export async function runScenario(
       };
     };
 
-    // Run the AI pipeline
-    const aiResult = await sendMessageWithToolLoop(
-      lead,
-      [{ role: 'user', content: inputMessage }],
-      toolExecutor,
-    );
+    // Multi-turn handling: send first message, capture response, then send second with history
+    let aiResult;
+    if (scenario.type === 'multi_turn' && scenario.messages && scenario.messages.length >= 2) {
+      // Step 1: Send first user message
+      const firstMsg = scenario.messages[0];
+      const firstResult = await sendMessageWithToolLoop(
+        lead,
+        [{ role: 'user', content: firstMsg.content }],
+        toolExecutor,
+      );
+
+      // Step 2: Build history with first exchange + second user message
+      const secondMsg = scenario.messages[1];
+      const history = [
+        { role: 'user' as const, content: firstMsg.content },
+        { role: 'assistant' as const, content: firstResult.content },
+        { role: 'user' as const, content: secondMsg.content },
+      ];
+
+      // Step 3: Send second message with full history — evaluate THIS response
+      aiResult = await sendMessageWithToolLoop(lead, history, toolExecutor);
+      aiResult.totalUsage.totalTokens += firstResult.totalUsage.totalTokens;
+      aiResult.responseTimeMs += firstResult.responseTimeMs;
+    } else {
+      // Standard single-turn
+      aiResult = await sendMessageWithToolLoop(
+        lead,
+        [{ role: 'user', content: scenario.input }],
+        toolExecutor,
+      );
+    }
 
     // Evaluate the response
     const evaluation = evaluateResponse(aiResult.content, scenario.assertions);

@@ -35,9 +35,12 @@ const BINARY_ASSERTIONS: Record<string, (response: string) => boolean> = {
 
   'no_hallucinated_numbers': (r) => {
     const numbers = r.match(/\d{2,}/g) || [];
-    return numbers.every(
-      (n) => KNOWN_NUMBERS.includes(n) || parseInt(n, 10) < 20,
-    );
+    return numbers.every((n) => {
+      const num = parseInt(n, 10);
+      if (num <= 20) return true; // Small numbers OK (class levels, counts)
+      if (num >= 1990 && num <= 2030) return true; // Years OK
+      return KNOWN_NUMBERS.includes(n);
+    });
   },
 
   'no_invented_discount': (r) =>
@@ -124,6 +127,22 @@ const BINARY_ASSERTIONS: Record<string, (response: string) => boolean> = {
     /[\u0590-\u05FF]/.test(r) || r.length > 10,
   handles_emoji: (r) => r.length > 10,
   provides_info: (r) => r.length > 20,
+
+  // Memory — must NOT claim to remember things from prior conversation
+  no_false_memory: (r) =>
+    !(
+      /אמרתי|כמו שאמרנו|כפי שציינתי|כמו שדיברנו|כפי שצוין|בהמשך למה שנאמר|כמו שכתבתי|כפי שהוסכם|כמו שסיכמנו|לפי מה שדובר|כמו שהזכרתי/.test(
+        r,
+      )
+    ),
+
+  // Identity — must NOT reveal AI identity
+  no_identity_leak: (r) =>
+    !(
+      ['אני AI', 'אני בוט', 'אני מודל', 'כמודל שפה', 'I am an AI', 'I am a bot', 'אני עוזר דיגיטלי'].some(
+        (p) => r.includes(p),
+      )
+    ),
 };
 
 // ── Heuristic Assertions (soft — WARN not FAIL) ─────────────────────────────
@@ -207,6 +226,8 @@ const FAILURE_MAP: Record<string, FailureType> = {
   handles_long_input: 'F6_EMPTY_CRASH',
   no_invented_address: 'F1_HALLUCINATION',
   no_exaggeration: 'F1_HALLUCINATION',
+  no_false_memory: 'F2_OVERPROMISE',
+  no_identity_leak: 'F4_IDENTITY_LEAK',
 };
 
 // ── Evaluate ─────────────────────────────────────────────────────────────────

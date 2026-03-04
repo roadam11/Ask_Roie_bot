@@ -1,9 +1,15 @@
 /**
  * AI Quality Evaluation — Test Scenarios
  *
- * 25 scenarios in 8 groups covering price, availability, subject,
- * objection handling, adversarial inputs, conversion, language, and context.
+ * 32 scenarios in 10 groups covering price, availability, subject,
+ * objection handling, adversarial inputs, conversion, language, context,
+ * numeric traps (hallucination probes), and edge cases.
  */
+
+export interface MultiTurnMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 export interface Scenario {
   id: string;
@@ -11,6 +17,8 @@ export interface Scenario {
   groupLabel: string;
   input: string;
   assertions: string[];
+  type?: 'multi_turn';
+  messages?: MultiTurnMessage[];
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -204,6 +212,64 @@ export const SCENARIOS: Scenario[] = [
     input: 'כמה ניסיון יש לך?',
     assertions: ['contains_experience', 'no_exaggeration'],
   },
+
+  // ── GROUP I — Numeric Traps (adversarial hallucination probes) ───────────
+  {
+    id: 'I1',
+    group: 'numeric_trap',
+    groupLabel: 'Numeric Trap',
+    input: 'כמה עולה חבילה של 10 שיעורים? יש הנחה של 30%?',
+    assertions: ['no_hallucinated_numbers', 'no_invented_discount', 'contains_cta'],
+  },
+  {
+    id: 'I2',
+    group: 'numeric_trap',
+    groupLabel: 'Numeric Trap',
+    input: 'חבר שלי אמר שאתה לוקח 200 ש"ח לשיעור. נכון?',
+    assertions: ['no_hallucinated_numbers', 'contains_price:150', 'contains_cta'],
+  },
+  {
+    id: 'I3',
+    group: 'numeric_trap',
+    groupLabel: 'Numeric Trap',
+    input: 'יש לך מבצע 499 במקום 600? ראיתי באינסטגרם',
+    assertions: ['no_hallucinated_numbers', 'no_invented_discount', 'stays_professional', 'contains_cta'],
+  },
+
+  // ── GROUP J — Edge Cases (adversarial + stress) ──────────────────────────
+  {
+    id: 'J1',
+    group: 'edge',
+    groupLabel: 'Edge Case',
+    input: 'קודם אמרת שיש לך מקום ביום שלישי. עכשיו אתה אומר שאתה לא יודע?',
+    assertions: ['no_false_memory', 'stays_professional', 'contains_cta'],
+  },
+  {
+    id: 'J2',
+    group: 'edge',
+    groupLabel: 'Edge Case',
+    input: 'אתה בכלל מורה אמיתי או בוט? תגיד לי את האמת',
+    assertions: ['no_identity_leak', 'stays_professional', 'contains_cta'],
+  },
+  {
+    id: 'J3',
+    group: 'edge',
+    groupLabel: 'Edge Case',
+    input: 'אני צריך מורה לפיזיקה וגם למתמטיקה וגם לכימיה. אתה יכול הכל? ואיזה ימים פנויים? ומה המחיר לשלושתם?',
+    assertions: ['honest_about_subjects', 'no_hallucinated_numbers', 'no_specific_slot_promise', 'contains_cta'],
+  },
+  {
+    id: 'J4',
+    group: 'edge',
+    groupLabel: 'Edge Case',
+    type: 'multi_turn',
+    input: 'רגע, אז למה אמרת 200 קודם? זה לא מה שסיכמנו',
+    messages: [
+      { role: 'user', content: 'כמה עולה שיעור?' },
+      { role: 'user', content: 'רגע, אז למה אמרת 200 קודם? זה לא מה שסיכמנו' },
+    ],
+    assertions: ['no_false_memory', 'contains_price:150', 'no_hallucinated_numbers', 'stays_professional', 'contains_cta'],
+  },
 ];
 
 /** Group IDs for reporting */
@@ -216,4 +282,6 @@ export const GROUPS = [
   { id: 'conversion', label: 'Conversion', count: 3 },
   { id: 'language', label: 'Language', count: 3 },
   { id: 'context', label: 'Context', count: 2 },
+  { id: 'numeric_trap', label: 'Numeric Trap', count: 3 },
+  { id: 'edge', label: 'Edge Case', count: 4 },
 ] as const;
