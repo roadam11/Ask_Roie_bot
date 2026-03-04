@@ -21,6 +21,8 @@ import type { RawTelemetryPayload } from './telemetry.service.js';
 import { loadSettingsForLead } from './settings.service.js';
 import type { AccountSettings } from './settings.service.js';
 import { validateAIResponse, ensureCTA } from '../utils/response-validator.js';
+import { selectModel } from '../utils/model-router.js';
+import type { RoutingDecision } from '../utils/model-router.js';
 
 // ============================================================================
 // Types
@@ -92,9 +94,17 @@ const PRICING = {
     input: 3.0,
     output: 15.0,
   },
+  'claude-sonnet-4-20250514': {
+    input: 3.0,
+    output: 15.0,
+  },
   'claude-3-haiku-20240307': {
     input: 0.25,
     output: 1.25,
+  },
+  'claude-haiku-4-5-20251001': {
+    input: 0.80,
+    output: 4.0,
   },
   default: {
     input: 3.0,
@@ -798,21 +808,46 @@ export async function sendMessageWithToolLoop(
   // Load account settings for prompt personalization
   const settings = await safeLoadSettings(lead.id);
 
+  // --- Hybrid routing: select model based on message complexity ---
+  const lastUserMsg = conversationHistory
+    .filter(m => m.role === 'user')
+    .pop()?.content || '';
+  const routingDecision: RoutingDecision = selectModel(lastUserMsg, conversationHistory);
+  const selectedModel = routingDecision.model;
+  const isHaiku = selectedModel.includes('haiku');
+
+  // --- Dynamic context: Haiku gets leaner prompt ---
+  // Adaptive history: if numbers appeared in history, Haiku needs more context
+  const historyHasNumbers = conversationHistory.some(h => /\d{2,}/.test(h.content || ''));
+  const historyLimit = isHaiku
+    ? (historyHasNumbers ? 4 : 2)
+    : 6;
+  const maxTokens = isHaiku ? 280 : config.anthropic.maxTokens;
+
   const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
 
-  // Trim conversation history to last 6 messages (3 turns) to reduce token usage
-  const trimmedHistory = conversationHistory.slice(-6);
+  // Trim conversation history based on model
+  const trimmedHistory = conversationHistory.slice(-historyLimit);
   let messages = formatMessagesForClaude(trimmedHistory);
 
   if (messages.length === 0) {
     throw new Error('No messages to send to Claude');
   }
 
+  logger.info('[ROUTER] Model selected', {
+    leadId: lead.id,
+    score: routingDecision.score,
+    reasons: routingDecision.reasons,
+    model: selectedModel,
+    historyLimit,
+    maxTokens,
+  });
+
   const executedToolCalls: ToolCall[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCostUsd = 0;
-  let model = config.anthropic.model;
+  let model = selectedModel;
   let apiCallCount = 0;
   let finalContent = '';
 
@@ -827,8 +862,8 @@ export async function sendMessageWithToolLoop(
 
     // Make API call
     const response = await anthropic.messages.create({
-      model: config.anthropic.model,
-      max_tokens: config.anthropic.maxTokens,
+      model: selectedModel,
+      max_tokens: maxTokens,
       temperature: 0.4,
       system: buildCachedSystemBlocks(systemPrompt),
       messages,
@@ -873,6 +908,8 @@ export async function sendMessageWithToolLoop(
       }
 
       const validation = validateAIResponse(finalContent, profileData);
+      let hasFallback = false;
+
       if (!validation.isClean) {
         logger.warn('[AI-GUARD] Hallucination detected! Numbers:', {
           suspicious: validation.suspiciousNumbers,
@@ -880,51 +917,112 @@ export async function sendMessageWithToolLoop(
           leadId: lead.id,
         });
 
-        // ONE retry with strict warning
-        try {
-          const retryMessages: Anthropic.MessageParam[] = [
-            ...messages,
-            { role: 'assistant', content: finalContent },
-            { role: 'user', content: 'SYSTEM WARNING: Your response contained numbers not in the profile. Regenerate without inventing any numbers. Only use numbers from TUTOR_PROFILE.' },
-          ];
-
-          const retryResponse = await anthropic.messages.create({
-            model: config.anthropic.model,
-            max_tokens: config.anthropic.maxTokens,
-            temperature: 0.2,
-            system: buildCachedSystemBlocks(systemPrompt),
-            messages: retryMessages,
-            tools: TOOLS,
+        // If Haiku failed validation → fallback to Sonnet
+        if (isHaiku) {
+          logger.warn('[FALLBACK] Haiku failed validation → Sonnet retry', {
+            leadId: lead.id,
+            issues: validation.suspiciousNumbers,
+            score: routingDecision.score,
+            reasons: routingDecision.reasons,
           });
 
-          const retryParsed = parseResponse(retryResponse);
-          totalInputTokens += retryParsed.usage.inputTokens;
-          totalOutputTokens += retryParsed.usage.outputTokens;
-          totalCostUsd += retryParsed.costUsd;
-          apiCallCount++;
+          try {
+            const sonnetModel = process.env.AI_MODEL_SONNET || 'claude-sonnet-4-20250514';
+            const fullHistory = conversationHistory.slice(-6);
+            const sonnetMessages = formatMessagesForClaude(fullHistory);
 
-          const retryValidation = validateAIResponse(retryParsed.content, profileData);
-          if (retryValidation.isClean && retryParsed.content.length > 0) {
-            logger.info('[AI-GUARD] Retry succeeded — clean response', { leadId: lead.id });
-            finalContent = retryParsed.content;
-          } else {
-            logger.error('[AI-GUARD] Retry STILL has suspicious numbers', {
-              suspicious: retryValidation.suspiciousNumbers,
+            const fallbackResponse = await anthropic.messages.create({
+              model: sonnetModel,
+              max_tokens: config.anthropic.maxTokens,
+              temperature: 0.4,
+              system: buildCachedSystemBlocks(systemPrompt),
+              messages: sonnetMessages,
+              tools: TOOLS,
+            });
+
+            const fallbackParsed = parseResponse(fallbackResponse);
+            totalInputTokens += fallbackParsed.usage.inputTokens;
+            totalOutputTokens += fallbackParsed.usage.outputTokens;
+            totalCostUsd += fallbackParsed.costUsd;
+            apiCallCount++;
+            model = fallbackParsed.model;
+            hasFallback = true;
+
+            const fallbackValidation = validateAIResponse(fallbackParsed.content, profileData);
+            if (fallbackValidation.isClean && fallbackParsed.content.length > 0) {
+              logger.info('[FALLBACK] Sonnet retry succeeded', { leadId: lead.id });
+              finalContent = fallbackParsed.content;
+            } else {
+              logger.warn('[FALLBACK] Sonnet also has issues, using Sonnet response anyway', {
+                leadId: lead.id,
+              });
+              if (fallbackParsed.content.length > 0) {
+                finalContent = fallbackParsed.content;
+              }
+            }
+          } catch (fallbackErr) {
+            logger.error('[FALLBACK] Sonnet retry failed', {
+              error: (fallbackErr as Error).message,
               leadId: lead.id,
             });
-            // Use original response, logged for monitoring
           }
-        } catch (retryErr) {
-          logger.error('[AI-GUARD] Retry API call failed', {
-            error: (retryErr as Error).message,
-            leadId: lead.id,
-          });
+        } else {
+          // Sonnet hallucination retry (existing logic)
+          try {
+            const retryMessages: Anthropic.MessageParam[] = [
+              ...messages,
+              { role: 'assistant', content: finalContent },
+              { role: 'user', content: 'SYSTEM WARNING: Your response contained numbers not in the profile. Regenerate without inventing any numbers. Only use numbers from TUTOR_PROFILE.' },
+            ];
+
+            const retryResponse = await anthropic.messages.create({
+              model: selectedModel,
+              max_tokens: maxTokens,
+              temperature: 0.2,
+              system: buildCachedSystemBlocks(systemPrompt),
+              messages: retryMessages,
+              tools: TOOLS,
+            });
+
+            const retryParsed = parseResponse(retryResponse);
+            totalInputTokens += retryParsed.usage.inputTokens;
+            totalOutputTokens += retryParsed.usage.outputTokens;
+            totalCostUsd += retryParsed.costUsd;
+            apiCallCount++;
+
+            const retryValidation = validateAIResponse(retryParsed.content, profileData);
+            if (retryValidation.isClean && retryParsed.content.length > 0) {
+              logger.info('[AI-GUARD] Retry succeeded — clean response', { leadId: lead.id });
+              finalContent = retryParsed.content;
+            } else {
+              logger.error('[AI-GUARD] Retry STILL has suspicious numbers', {
+                suspicious: retryValidation.suspiciousNumbers,
+                leadId: lead.id,
+              });
+            }
+          } catch (retryErr) {
+            logger.error('[AI-GUARD] Retry API call failed', {
+              error: (retryErr as Error).message,
+              leadId: lead.id,
+            });
+          }
         }
       }
 
       // ── Post-AI Guard 2: CTA append ──
       const ctaResult = ensureCTA(finalContent);
       finalContent = ctaResult.text;
+
+      // ── Router cost log ──
+      logger.info(
+        `[ROUTER] score=${routingDecision.score} ` +
+        `reasons=[${routingDecision.reasons}] ` +
+        `model=${model} ` +
+        `input_tokens=${totalInputTokens} ` +
+        `output_tokens=${totalOutputTokens} ` +
+        `fallback=${hasFallback}`,
+        { leadId: lead.id },
+      );
 
       logger.info('Agent loop completed', {
         leadId: lead.id,
@@ -935,6 +1033,9 @@ export async function sendMessageWithToolLoop(
         totalCostUsd: totalCostUsd.toFixed(4),
         hallucinationGuardTriggered: !validation.isClean,
         ctaAppended: ctaResult.appended,
+        routerScore: routingDecision.score,
+        routerReasons: routingDecision.reasons,
+        hasFallback,
       });
 
       return {
