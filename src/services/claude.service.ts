@@ -305,6 +305,21 @@ function calculateCost(
 }
 
 /**
+ * Build system message blocks with prompt caching enabled.
+ * Uses cache_control: ephemeral for 5-minute prompt cache (90% cost reduction on hits).
+ * The SDK type (v0.27) doesn't include cache_control yet, so we use a broader type.
+ */
+function buildCachedSystemBlocks(systemPrompt: string): Anthropic.MessageCreateParams['system'] {
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    } as unknown as Anthropic.TextBlockParam,
+  ];
+}
+
+/**
  * Format conversation messages for Claude API
  */
 function formatMessagesForClaude(
@@ -447,7 +462,7 @@ export async function sendMessage(
         model: config.anthropic.model,
         max_tokens: config.anthropic.maxTokens,
         temperature: 0.4,
-        system: systemPrompt,
+        system: buildCachedSystemBlocks(systemPrompt),
         messages,
         tools: TOOLS,
       });
@@ -517,7 +532,7 @@ export async function sendSimpleMessage(
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens,
-      system: systemPrompt,
+      system: buildCachedSystemBlocks(systemPrompt),
       messages: [{ role: 'user', content: userMessage }],
     });
 
@@ -578,7 +593,7 @@ export async function continueAfterToolUse(
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens,
       temperature: 0.4,
-      system: systemPrompt,
+      system: buildCachedSystemBlocks(systemPrompt),
       messages,
       tools: TOOLS,
     });
@@ -785,8 +800,8 @@ export async function sendMessageWithToolLoop(
 
   const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
 
-  // Trim conversation history to last 10 messages (5 turns) to reduce token usage
-  const trimmedHistory = conversationHistory.slice(-10);
+  // Trim conversation history to last 6 messages (3 turns) to reduce token usage
+  const trimmedHistory = conversationHistory.slice(-6);
   let messages = formatMessagesForClaude(trimmedHistory);
 
   if (messages.length === 0) {
@@ -815,7 +830,7 @@ export async function sendMessageWithToolLoop(
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens,
       temperature: 0.4,
-      system: systemPrompt,
+      system: buildCachedSystemBlocks(systemPrompt),
       messages,
       tools: TOOLS,
     });
@@ -877,7 +892,7 @@ export async function sendMessageWithToolLoop(
             model: config.anthropic.model,
             max_tokens: config.anthropic.maxTokens,
             temperature: 0.2,
-            system: systemPrompt,
+            system: buildCachedSystemBlocks(systemPrompt),
             messages: retryMessages,
             tools: TOOLS,
           });

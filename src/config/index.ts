@@ -331,8 +331,8 @@ const config: Config = {
 
   anthropic: {
     apiKey: env.ANTHROPIC_API_KEY,
-    model: 'claude-sonnet-4-20250514',
-    maxTokens: 1024,
+    model: process.env.AI_MODEL || 'claude-sonnet-4-20250514',
+    maxTokens: 350,
   },
 
   calendly: {
