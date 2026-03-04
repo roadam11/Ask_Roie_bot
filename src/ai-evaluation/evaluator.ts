@@ -65,11 +65,7 @@ const BINARY_ASSERTIONS: Record<string, (response: string) => boolean> = {
       (p) => r.includes(p),
     ),
 
-  // Location
-  contains_location: (r) =>
-    r.includes('שרון') || r.includes('הרצליה') || r.includes('רעננה') ||
-    r.includes('כפר סבא') || r.includes('נתניה') || r.includes("ת\"א") ||
-    r.includes('ת״א') || r.includes('תל אביב') || r.includes('זום'),
+  // Location — moved to heuristic (bot may ask qualifying questions first with generic prompt)
 
   no_invented_address: (r) =>
     !(/רחוב\s+\S+\s+\d+|מספר \d+|קומה \d+/.test(r)),
@@ -159,6 +155,14 @@ const BINARY_ASSERTIONS: Record<string, (response: string) => boolean> = {
 // ── Heuristic Assertions (soft — WARN not FAIL) ─────────────────────────────
 
 const HEURISTIC_ASSERTIONS: Record<string, (response: string) => boolean> = {
+  // Location — accept specific locations from TUTOR_PROFILE OR a valid deflection
+  contains_location: (r) =>
+    r.includes('שרון') || r.includes('הרצליה') || r.includes('רעננה') ||
+    r.includes('כפר סבא') || r.includes('נתניה') || r.includes("ת\"א") ||
+    r.includes('ת״א') || r.includes('תל אביב') || r.includes('זום') ||
+    r.includes('פרונטלי') || r.includes('אונליין') ||
+    r.includes('אבדוק') || r.includes('מיקום'),
+
   suggests_contact: (r) =>
     r.length > 20 &&
     ['אשמח', 'נשמח', 'צור קשר', 'שלח', 'calendly', 'Calendly'].some((w) =>
