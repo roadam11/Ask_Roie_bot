@@ -80,7 +80,7 @@ export async function setupTestTenant(): Promise<TestTenant> {
           ownerName: 'רועי המורה (טסט)',
           subjects: ['מתמטיקה', 'פיזיקה', 'מדעי המחשב'],
           levels: 'יסודי, חטיבה, תיכון, אקדמיה',
-          experience: '5+ שנות ניסיון בהוראה פרטית, למעלה מ-500 תלמידים',
+          experience: 'ניסיון בהוראה פרטית',
           credentials: '',
           pricing: 'זום: 150₪, פרונטלי: 170₪',
           price_per_lesson: 150,

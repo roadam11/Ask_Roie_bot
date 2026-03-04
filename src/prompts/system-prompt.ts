@@ -724,17 +724,23 @@ const HARD_CONSTRAINTS = `
 [IDENTITY] Never reveal you are AI/bot/language model. Respond as the teacher's assistant.
 [COMPETITORS] Never disparage competitors. Highlight your value instead.
 [RESULTS] Never promise guaranteed grades or outcomes.
-[CREDENTIALS] ABSOLUTE PROHIBITION on fabricating credentials.
-  NEVER mention ANY of the following unless they appear WORD FOR WORD in TUTOR_PROFILE:
-  - Degrees (תואר ראשון, תואר שני, BA, MA, PhD)
-  - Certificates or teaching licenses (תעודת הוראה)
-  - Specific years of experience ("5 שנים", "10 שנים")
-  - Student counts ("500 תלמידים", "מאות תלמידים")
-  - Success rates or grade improvements ("מ-60 ל-85")
-  - Awards, recognition, or rankings
-  If user asks about credentials not in TUTOR_PROFILE:
-  → "יש לי ניסיון בהוראה פרטית, אשמח שתנסה שיעור ניסיון ותראה בעצמך 🙂"
-  NEVER extrapolate credentials from context (e.g., "teaches math" ≠ "has math degree").
+[CREDENTIALS] ABSOLUTE PROHIBITION — READ THIS THREE TIMES:
+  The word "תואר" must NEVER appear in your response unless
+  TUTOR_PROFILE contains the EXACT word "תואר".
+
+  TUTOR_PROFILE says credentials: "" ← THIS MEANS NO DEGREE.
+
+  "ניסיון בהוראה פרטית" does NOT mean you have a degree.
+  Teaching a subject does NOT mean you have a degree in it.
+
+  If user asks "יש לך תואר?" and credentials is empty → respond:
+  "אני מעדיף לא להיכנס לפרטים האלה בצ׳אט —
+  אשמח שנקבע שיעור ניסיון ותראה בעצמך את רמת ההוראה 🙂"
+
+  NEVER say "תואר ראשון", "תואר שני", "BA", "MA", "PhD",
+  "תעודת הוראה", "אוניברסיטה" unless credentials field contains it word-for-word.
+  NEVER fabricate student counts, years of experience, success rates,
+  awards, or rankings not VERBATIM in TUTOR_PROFILE.
 [SPARSE_PROFILE] When TUTOR_PROFILE has few fields:
   - Do NOT fill gaps with assumptions or fabrications.
   - Focus on what you DO know (subjects, price if available).
@@ -817,30 +823,30 @@ export function buildPromptWithContext(
   // ── Part A: Hard Constraints (non-overridable, always first) ──
   const parts: string[] = [HARD_CONSTRAINTS];
 
-  // ── Part B: Base prompt (custom or hardcoded) + teacher instructions ──
+  // ── Part B: GENERIC_SALES_PROMPT (always injected, core behavior) ──
+  const resolvedGeneric = GENERIC_SALES_PROMPT
+    .replace('{{LEAD_STATE}}', formattedLeadState)
+    .replace('{{CONVERSATION_HISTORY}}', formattedHistory);
+
+  parts.push(resolvedGeneric);
+
+  // ── Part C: Custom prompt from DB (optional, ADDITIVE only) ──
   const hasCustomPrompt =
     settings?.behavior?.systemPrompt != null &&
     typeof settings.behavior.systemPrompt === 'string' &&
     settings.behavior.systemPrompt.trim().length > 0;
 
-  const basePrompt = hasCustomPrompt
-    ? settings!.behavior!.systemPrompt!
-    : GENERIC_SALES_PROMPT;
+  if (hasCustomPrompt) {
+    parts.push(`=== ADDITIONAL TEACHER INSTRUCTIONS ===\n${settings!.behavior!.systemPrompt!.trim()}`);
+  }
 
-  // Replace standard placeholders
-  const resolvedPrompt = basePrompt
-    .replace('{{LEAD_STATE}}', formattedLeadState)
-    .replace('{{CONVERSATION_HISTORY}}', formattedHistory);
-
-  parts.push(resolvedPrompt);
-
-  // ── Part C: TUTOR_PROFILE data injection ──
+  // ── Part D: TUTOR_PROFILE data injection ──
   const tutorProfileBlock = buildTutorProfileBlock(settings);
   if (tutorProfileBlock) {
     parts.push(tutorProfileBlock);
   }
 
-  // ── Part D: Conditional prompt blocks (based on last user message) ──
+  // ── Part E: Conditional prompt blocks (based on last user message) ──
   const lastUserMsg = conversationHistory
     .filter(m => m.role === 'user')
     .pop();
