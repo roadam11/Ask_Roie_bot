@@ -25,6 +25,12 @@ import { selectModel } from '../utils/model-router.js';
 import type { RoutingDecision } from '../utils/model-router.js';
 
 // ============================================================================
+// History Sanitization — strip polluted credential claims from old bot messages
+// ============================================================================
+
+const FORBIDDEN_CLAIMS = /תואר ראשון|תואר שני|BA |MA |PhD|500 תלמידים|מאות תלמידים/gi;
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -828,7 +834,19 @@ export async function sendMessageWithToolLoop(
 
   // Trim conversation history based on model
   const trimmedHistory = conversationHistory.slice(-historyLimit);
-  let messages = formatMessagesForClaude(trimmedHistory);
+
+  // ── History sanitization: strip polluted credential claims from old bot messages ──
+  const cleanedHistory = trimmedHistory.map(msg => {
+    if (msg.role === 'assistant' || msg.role === 'bot') {
+      return {
+        ...msg,
+        content: msg.content.replace(FORBIDDEN_CLAIMS, '[...]'),
+      };
+    }
+    return msg;
+  });
+
+  let messages = formatMessagesForClaude(cleanedHistory);
 
   if (messages.length === 0) {
     throw new Error('No messages to send to Claude');
