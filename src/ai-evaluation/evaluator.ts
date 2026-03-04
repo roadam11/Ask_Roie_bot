@@ -122,6 +122,17 @@ const BINARY_ASSERTIONS: Record<string, (response: string) => boolean> = {
   no_exaggeration: (r) =>
     !(/\d{2,}\+?\s*שנות?\s*ניסיון/.test(r) && !r.includes('5')),
 
+  // Credential hallucination — must NOT fabricate degrees, years, student counts
+  no_hallucinated_credentials: (r) =>
+    !([
+      'תואר ראשון', 'תואר שני', 'תואר', 'BA', 'B.Sc', 'MA', 'M.Sc', 'PhD',
+      'תעודת הוראה', 'אוניברסיט',
+    ].some((c) => r.includes(c))) &&
+    // No specific student counts or years of experience unless from profile
+    !(/\d+\+?\s*(שנו?ת|שנים)\s*ניסיון/.test(r)) &&
+    !(/\d+\+?\s*תלמיד/.test(r)) &&
+    !(/למעלה מ-?\d+/.test(r)),
+
   // Language
   responds_in_hebrew_or_matches_language: (r) =>
     /[\u0590-\u05FF]/.test(r) || r.length > 10,
@@ -228,6 +239,7 @@ const FAILURE_MAP: Record<string, FailureType> = {
   no_exaggeration: 'F1_HALLUCINATION',
   no_false_memory: 'F2_OVERPROMISE',
   no_identity_leak: 'F4_IDENTITY_LEAK',
+  no_hallucinated_credentials: 'F1_HALLUCINATION',
 };
 
 // ── Evaluate ─────────────────────────────────────────────────────────────────

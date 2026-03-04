@@ -217,23 +217,46 @@ async function processMessage(
     // Mark message as read in WhatsApp
     await WhatsAppService.markAsRead(whatsappMessageId);
 
+    // Find default agent for assigning to new leads
+    const defaultAgent = await queryOne<{ id: string; account_id: string }>(
+      `SELECT id, account_id FROM agents LIMIT 1`,
+    );
+
     // Get or create lead
     const contactName = contact?.profile?.name;
     const { lead, created } = await LeadService.findOrCreateLead(phone, {
       name: contactName,
+      agent_id: defaultAgent?.id,
     });
 
     if (created) {
       logger.info('New lead created from WhatsApp', {
         leadId: lead.id,
         name: contactName,
+        agentId: defaultAgent?.id,
       });
+
+      // Create a conversation for the new lead so it appears in Dashboard
+      if (defaultAgent) {
+        try {
+          await query(
+            `INSERT INTO conversations (lead_id, agent_id, started_at, status, channel, ai_stage, message_count, created_at)
+             VALUES ($1, $2, NOW(), 'active', 'whatsapp', 'qualifying', 0, NOW())`,
+            [lead.id, defaultAgent.id],
+          );
+        } catch (convErr) {
+          logger.error('Failed to create conversation for new WhatsApp lead', {
+            leadId: lead.id,
+            error: (convErr as Error).message,
+          });
+        }
+      }
     }
 
     // Activation: mark real_lead status (monotonic, never downgrade)
     try {
       if (!lead.is_demo) {
-        const tenantAccountId = await getAccountIdByLeadId(lead.id);
+        const tenantAccountId = defaultAgent?.account_id ?? await getAccountIdByLeadId(lead.id);
         if (tenantAccountId) {
           await query(
             `UPDATE settings SET profile = profile || '{"activation_status":"real_lead"}'::jsonb

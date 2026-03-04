@@ -79,8 +79,17 @@ export async function setupTestTenant(): Promise<TestTenant> {
           companyName: 'רועי אדם — מורה פרטי',
           ownerName: 'רועי המורה (טסט)',
           subjects: ['מתמטיקה', 'פיזיקה', 'מדעי המחשב'],
+          levels: 'יסודי, חטיבה, תיכון, אקדמיה',
+          experience: '5+ שנות ניסיון בהוראה פרטית, למעלה מ-500 תלמידים',
+          credentials: '',
           pricing: 'זום: 150₪, פרונטלי: 170₪',
           price_per_lesson: 150,
+          packages: 'חבילת 10 שיעורים: 10% הנחה | חבילת 20 שיעורים: 15% הנחה',
+          availability: 'ראשון-חמישי 14:00-21:00, שישי 09:00-14:00, שבת סגור',
+          location: 'זום: בכל מקום | פרונטלי: אזור השרון (הרצליה, רעננה, כפר סבא, נתניה) וצפון ת״א',
+          formats: 'זום, פרונטלי',
+          usp: 'תמיכה בווטסאפ בין השיעורים ללא תוספת תשלום',
+          calendly_link: 'https://calendly.com/roadam11/meet-with-me',
           phone: '0500000000',
           timezone: 'Asia/Jerusalem',
         }),
@@ -108,7 +117,23 @@ export async function runScenario(
   const leadName = `${TEST_LEAD_PREFIX}${scenario.id}`;
   let leadId: string | null = null;
 
+  let originalProfile: unknown = null;
+
   try {
+    // If scenario has a profile override, temporarily swap the settings profile
+    if (scenario.profileOverride) {
+      const currentSettings = await queryOne<{ profile: unknown }>(
+        `SELECT profile FROM settings WHERE account_id = $1`,
+        [tenant.accountId],
+      );
+      originalProfile = currentSettings?.profile ?? null;
+
+      await query(
+        `UPDATE settings SET profile = $1::jsonb WHERE account_id = $2`,
+        [JSON.stringify(scenario.profileOverride), tenant.accountId],
+      );
+    }
+
     // Create test lead
     const leadRes = await queryOne<{ id: string }>(
       `INSERT INTO leads (phone, name, is_demo, agent_id, status, lead_state)
@@ -247,6 +272,14 @@ export async function runScenario(
       error: error.message,
     };
   } finally {
+    // Restore original profile if we overrode it
+    if (scenario.profileOverride && originalProfile !== null) {
+      await query(
+        `UPDATE settings SET profile = $1::jsonb WHERE account_id = $2`,
+        [JSON.stringify(originalProfile), tenant.accountId],
+      );
+    }
+
     // Clean up this test lead immediately
     if (leadId) {
       await query(`DELETE FROM messages WHERE lead_id = $1`, [leadId]);

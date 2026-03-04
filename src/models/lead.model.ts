@@ -154,6 +154,12 @@ export async function create(
     placeholders.push(`$${paramIndex++}`);
   }
 
+  if (data?.agent_id !== undefined) {
+    fields.push('agent_id');
+    values.push(data.agent_id);
+    placeholders.push(`$${paramIndex++}`);
+  }
+
   const sql = `
     INSERT INTO leads (${fields.join(', ')})
     VALUES (${placeholders.join(', ')})

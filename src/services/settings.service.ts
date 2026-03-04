@@ -20,9 +20,17 @@ export interface AccountProfile {
   email?: string;
   timezone?: string;
   subjects?: string[];
-  levels?: string[];
+  levels?: string | string[];
+  experience?: string;
+  credentials?: string;
   price_per_lesson?: number;
   pricing?: string;
+  packages?: string;
+  availability?: string;
+  location?: string;
+  formats?: string;
+  usp?: string;
+  calendly_link?: string;
 }
 
 export interface AccountBehavior {

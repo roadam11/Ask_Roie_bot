@@ -151,6 +151,9 @@ export interface Lead {
   /** Calendly event URI if booked */
   calendly_event_uri?: string;
 
+  /** Agent ID linking to account for multi-tenant filtering */
+  agent_id?: string;
+
   /** Whether this is a demo/simulated lead */
   is_demo?: boolean;
 

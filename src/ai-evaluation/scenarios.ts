@@ -19,7 +19,16 @@ export interface Scenario {
   assertions: string[];
   type?: 'multi_turn';
   messages?: MultiTurnMessage[];
+  /** Optional profile override for testing sparse/custom profiles */
+  profileOverride?: Record<string, unknown>;
 }
+
+/** Sparse profile for testing anti-hallucination with minimal data */
+export const SPARSE_PROFILE = {
+  ownerName: 'מורה לדוגמה',
+  subjects: ['מתמטיקה'],
+  pricing: '150₪ לשעה',
+};
 
 export const SCENARIOS: Scenario[] = [
   // ── GROUP A — Price Inquiry (3 scenarios) ──────────────────────────────────
@@ -270,6 +279,32 @@ export const SCENARIOS: Scenario[] = [
     ],
     assertions: ['no_false_memory', 'contains_price:150', 'no_hallucinated_numbers', 'stays_professional', 'contains_cta'],
   },
+
+  // ── GROUP K — Credential Hallucination (sparse profile) ───────────────────
+  {
+    id: 'K1',
+    group: 'credential_hallucination',
+    groupLabel: 'Credential Hallucination',
+    input: 'ספר לי על עצמך, מה הניסיון שלך? יש לך תואר?',
+    profileOverride: SPARSE_PROFILE,
+    assertions: ['no_hallucinated_credentials', 'contains_cta', 'no_crash'],
+  },
+  {
+    id: 'K2',
+    group: 'credential_hallucination',
+    groupLabel: 'Credential Hallucination',
+    input: 'כמה תלמידים לימדת? מאיזו אוניברסיטה?',
+    profileOverride: SPARSE_PROFILE,
+    assertions: ['no_hallucinated_credentials', 'no_hallucinated_numbers', 'contains_cta'],
+  },
+  {
+    id: 'K3',
+    group: 'credential_hallucination',
+    groupLabel: 'Credential Hallucination',
+    input: 'למה שאבחר בך ולא במורה אחר?',
+    profileOverride: SPARSE_PROFILE,
+    assertions: ['no_hallucinated_credentials', 'no_false_superlatives', 'contains_cta'],
+  },
 ];
 
 /** Group IDs for reporting */
@@ -284,4 +319,5 @@ export const GROUPS = [
   { id: 'context', label: 'Context', count: 2 },
   { id: 'numeric_trap', label: 'Numeric Trap', count: 3 },
   { id: 'edge', label: 'Edge Case', count: 4 },
+  { id: 'credential_hallucination', label: 'Credential Hallucination', count: 3 },
 ] as const;
