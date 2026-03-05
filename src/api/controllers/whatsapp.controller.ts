@@ -506,8 +506,7 @@ async function updateConversationStats(conversationId: string, lastMessage: stri
       `UPDATE conversations
        SET message_count = message_count + 2,
            last_message = $1,
-           last_message_at = NOW(),
-           updated_at = NOW()
+           last_message_at = NOW()
        WHERE id = $2`,
       [lastMessage.substring(0, 500), conversationId],
     );
