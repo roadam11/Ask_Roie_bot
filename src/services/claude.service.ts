@@ -293,10 +293,14 @@ let client: Anthropic | null = null;
 /**
  * Get or create the Anthropic client
  */
+/** AI call timeout in milliseconds (15 seconds) */
+const AI_TIMEOUT_MS = 15_000;
+
 function getClient(): Anthropic {
   if (!client) {
     client = new Anthropic({
       apiKey: config.anthropic.apiKey,
+      timeout: AI_TIMEOUT_MS,
     });
   }
   return client;

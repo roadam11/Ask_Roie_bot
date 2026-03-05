@@ -8,6 +8,7 @@
  * will retry, potentially causing duplicate processing.
  */
 
+import crypto from 'node:crypto';
 import { Request, Response } from 'express';
 import config from '../../config/index.js';
 import logger from '../../utils/logger.js';
@@ -188,25 +189,27 @@ async function processMessage(
   contact?: { profile: { name: string }; wa_id: string }
 ): Promise<void> {
   const startTime = Date.now();
+  const trace = crypto.randomBytes(6).toString('hex');
 
   try {
     // Extract message content
     const messageText = extractMessageText(message);
     if (!messageText) {
-      logger.debug('[WA_IN] No text content', { type: message.type });
+      logger.debug('[WA_IN] No text content', { trace, type: message.type });
       return;
     }
 
     // Normalize phone number
     const phone = normalizePhoneSafe(message.from);
     if (!phone) {
-      logger.warn('[WA_IN] Invalid phone', { from: message.from });
+      logger.warn('[WA_IN] Invalid phone', { trace, from: message.from });
       return;
     }
 
     const whatsappMessageId = message.id;
 
     logger.info('[WA_IN] Incoming message', {
+      trace,
       phone: maskPhone(phone),
       msgId: whatsappMessageId,
       type: message.type,
@@ -216,7 +219,7 @@ async function processMessage(
     // Dedupe check — atomic INSERT ON CONFLICT, skip if already processed
     const isNew = await isNewWebhookEvent('whatsapp', whatsappMessageId);
     if (!isNew) {
-      logger.info('[WA_SKIP] Duplicate message', { msgId: whatsappMessageId });
+      logger.info('[WA_SKIP] Duplicate message', { trace, msgId: whatsappMessageId });
       return;
     }
 
@@ -236,6 +239,7 @@ async function processMessage(
     });
 
     logger.info('[WA_LEAD] Lead resolved', {
+      trace,
       leadId: lead.id,
       created,
       agentId: defaultAgent?.id,
@@ -252,6 +256,7 @@ async function processMessage(
           );
         } catch (convErr) {
           logger.error('[WA_CONV] Failed to create conversation', {
+            trace,
             leadId: lead.id,
             error: (convErr as Error).message,
           });
@@ -272,7 +277,8 @@ async function processMessage(
         }
       }
     } catch (activationErr) {
-      logger.error('[ACTIVATION] Status update failed in WhatsApp handler', {
+      logger.error('[WA_ERR] Activation status update failed', {
+        trace,
         error: (activationErr as Error).message,
       });
     }
@@ -288,7 +294,7 @@ async function processMessage(
 
     // Check if lead is opted out
     if (lead.opted_out) {
-      logger.info('[WA_SKIP] Lead opted out', { leadId: lead.id });
+      logger.info('[WA_SKIP] Lead opted out', { trace, leadId: lead.id });
       return;
     }
 
@@ -299,16 +305,16 @@ async function processMessage(
     );
     const conversationId = conv?.id;
 
-    logger.info('[WA_CONV] Conversation resolved', { leadId: lead.id, conversationId });
+    logger.info('[WA_CONV] Conversation resolved', { trace, leadId: lead.id, conversationId });
 
     // Save user message
     const userMessage = await MessageService.createUserMessage(lead.id, messageText, whatsappMessageId, conversationId);
 
-    logger.info('[WA_SAVE] User message saved', { leadId: lead.id, messageId: userMessage.id });
+    logger.info('[WA_SAVE] User message saved', { trace, leadId: lead.id, messageId: userMessage.id });
 
     // ── Mutex: skip AI call if this lead is already being processed ──
     if (processingLeads.has(lead.id)) {
-      logger.warn('[WA_SKIP] Lead already processing, message saved but skipping AI', { leadId: lead.id });
+      logger.warn('[WA_SKIP] Lead already processing, message saved but skipping AI', { trace, leadId: lead.id });
       return;
     }
 
@@ -341,7 +347,7 @@ async function processMessage(
           lead.id, fallbackResponse, 0, 'fallback', 0, [], conversationId,
         );
         await WhatsAppService.sendTextMessage(phone, fallbackResponse);
-        logger.info('[WA_SKIP] Empty input guard triggered', { leadId: lead.id });
+        logger.info('[WA_SKIP] Empty input guard triggered', { trace, leadId: lead.id });
         // Update conversation denormalized fields
         if (conversationId) {
           await updateConversationStats(conversationId, fallbackResponse);
@@ -364,7 +370,7 @@ async function processMessage(
       // ── AI call with robust error handling ──
       let agentResult: Awaited<ReturnType<typeof ClaudeService.sendMessageWithToolLoop>>;
       try {
-        logger.info('[WA_AI] Calling Claude', { leadId: lead.id, historyLen: conversationHistory.length });
+        logger.info('[WA_AI] Calling Claude', { trace, leadId: lead.id, historyLen: conversationHistory.length });
 
         agentResult = await ClaudeService.sendMessageWithToolLoop(
           lead,
@@ -373,8 +379,10 @@ async function processMessage(
         );
       } catch (aiError) {
         logger.error('[WA_ERR] AI call failed', {
+          trace,
           leadId: lead.id,
           error: (aiError as Error).message,
+          stage: 'ai_call',
         });
 
         // Save error fallback message to DB and send to user
@@ -406,7 +414,7 @@ async function processMessage(
         conversationId,
       );
 
-      logger.info('[WA_SAVE] Bot message saved', { leadId: lead.id, messageId: botMessage.id });
+      logger.info('[WA_SAVE] Bot message saved', { trace, leadId: lead.id, messageId: botMessage.id });
 
       // Update conversation denormalized fields
       if (conversationId) {
@@ -423,6 +431,7 @@ async function processMessage(
 
       const duration = Date.now() - startTime;
       logger.info('[WA_OUT] Message processed', {
+        trace,
         leadId: lead.id,
         duration,
         tokens: agentResult.totalUsage.totalTokens,
@@ -453,11 +462,11 @@ async function processMessage(
 
             emitOverviewRefresh(wss, tenantId);
           } else {
-            logger.warn('[WA_ERR] Could not resolve accountId — skipping realtime', { leadId: lead.id });
+            logger.warn('[WA_ERR] Could not resolve accountId — skipping realtime', { trace, leadId: lead.id });
           }
         }
       } catch (emitError) {
-        logger.warn('[WA_ERR] Realtime emit failed', { error: emitError, leadId: lead.id });
+        logger.warn('[WA_ERR] Realtime emit failed', { trace, error: emitError, leadId: lead.id });
       }
 
       // Telemetry — fire and forget, never await in main path
@@ -468,7 +477,7 @@ async function processMessage(
         message_id: botMessage.id,
         prompt_version_id: null,
       }).catch((err) => {
-        logger.warn('[WA_ERR] Telemetry write failed', { error: err, leadId: lead.id });
+        logger.warn('[WA_ERR] Telemetry write failed', { trace, error: err, leadId: lead.id });
       });
 
     } finally {
@@ -477,6 +486,7 @@ async function processMessage(
 
   } catch (error) {
     logger.error('[WA_ERR] Unhandled error in processMessage', {
+      trace,
       messageId: message.id,
       error: (error as Error).message,
       stack: (error as Error).stack,
