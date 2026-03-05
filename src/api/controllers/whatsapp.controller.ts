@@ -35,6 +35,12 @@ import {
 import { logTelemetry } from '../../services/telemetry.service.js';
 
 // ============================================================================
+// Conversation Mutex — prevent parallel AI calls for the same lead
+// ============================================================================
+
+const processingLeads = new Set<string>();
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -187,30 +193,30 @@ async function processMessage(
     // Extract message content
     const messageText = extractMessageText(message);
     if (!messageText) {
-      logger.debug('No text content in message', { type: message.type });
+      logger.debug('[WA_IN] No text content', { type: message.type });
       return;
     }
 
     // Normalize phone number
     const phone = normalizePhoneSafe(message.from);
     if (!phone) {
-      logger.warn('Invalid phone number', { from: message.from });
+      logger.warn('[WA_IN] Invalid phone', { from: message.from });
       return;
     }
 
     const whatsappMessageId = message.id;
 
-    logger.info('Processing incoming message', {
+    logger.info('[WA_IN] Incoming message', {
       phone: maskPhone(phone),
-      messageId: whatsappMessageId,
+      msgId: whatsappMessageId,
       type: message.type,
-      textLength: messageText.length,
+      len: messageText.length,
     });
 
     // Dedupe check — atomic INSERT ON CONFLICT, skip if already processed
     const isNew = await isNewWebhookEvent('whatsapp', whatsappMessageId);
     if (!isNew) {
-      logger.info('Duplicate WhatsApp message skipped', { messageId: whatsappMessageId });
+      logger.info('[WA_SKIP] Duplicate message', { msgId: whatsappMessageId });
       return;
     }
 
@@ -229,13 +235,13 @@ async function processMessage(
       agent_id: defaultAgent?.id,
     });
 
-    if (created) {
-      logger.info('New lead created from WhatsApp', {
-        leadId: lead.id,
-        name: contactName,
-        agentId: defaultAgent?.id,
-      });
+    logger.info('[WA_LEAD] Lead resolved', {
+      leadId: lead.id,
+      created,
+      agentId: defaultAgent?.id,
+    });
 
+    if (created) {
       // Create a conversation for the new lead so it appears in Dashboard
       if (defaultAgent) {
         try {
@@ -245,7 +251,7 @@ async function processMessage(
             [lead.id, defaultAgent.id],
           );
         } catch (convErr) {
-          logger.error('Failed to create conversation for new WhatsApp lead', {
+          logger.error('[WA_CONV] Failed to create conversation', {
             leadId: lead.id,
             error: (convErr as Error).message,
           });
@@ -282,7 +288,7 @@ async function processMessage(
 
     // Check if lead is opted out
     if (lead.opted_out) {
-      logger.info('Lead is opted out, not processing', { leadId: lead.id });
+      logger.info('[WA_SKIP] Lead opted out', { leadId: lead.id });
       return;
     }
 
@@ -293,129 +299,184 @@ async function processMessage(
     );
     const conversationId = conv?.id;
 
+    logger.info('[WA_CONV] Conversation resolved', { leadId: lead.id, conversationId });
+
     // Save user message
     const userMessage = await MessageService.createUserMessage(lead.id, messageText, whatsappMessageId, conversationId);
 
-    // Get conversation history for Claude
-    const conversationHistory = await MessageService.getConversationForClaude(lead.id, 20);
+    logger.info('[WA_SAVE] User message saved', { leadId: lead.id, messageId: userMessage.id });
 
-    // Track lead state changes and interactive messages
-    let updatedLead = lead;
-    let interactiveMessage: WhatsAppService.WhatsAppInteractive | null = null;
-
-    // Create tool executor function
-    const toolExecutor: ToolExecutor = async (toolCall) => {
-      if (toolCall.name === 'update_lead_state') {
-        updatedLead = await processUpdateLeadState(lead.id, toolCall.input, messageText);
-        return { result: JSON.stringify({ success: true, leadId: lead.id }) };
-      } else if (toolCall.name === 'send_interactive_message') {
-        interactiveMessage = processInteractiveMessage(toolCall.input);
-        return { result: JSON.stringify({ success: true, messageQueued: !!interactiveMessage }) };
-      }
-      return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
-    };
-
-    // ── Empty input guard — skip AI call for empty/whitespace messages ──
-    if (!messageText.trim()) {
-      const fallbackResponse = 'היי! 😊 במה אפשר לעזור?';
-      const botMessage = await MessageService.createBotMessage(
-        lead.id, fallbackResponse, 0, 'fallback', 0, [], conversationId,
-      );
-      await WhatsAppService.sendTextMessage(phone, fallbackResponse);
-      logger.info('[AI-GUARD] Empty input guard triggered', { leadId: lead.id });
-      // Emit WS events
-      try {
-        const wss = getWebSocketServer();
-        if (wss && conv) {
-          const tenantId = await getAccountIdByLeadId(lead.id);
-          if (tenantId) {
-            emitMessageNew(wss, conv.id, userMessage.id, tenantId);
-            emitMessageNew(wss, conv.id, botMessage.id, tenantId);
-            emitOverviewRefresh(wss, tenantId);
-          }
-        }
-      } catch { /* ignore emit errors */ }
+    // ── Mutex: skip AI call if this lead is already being processed ──
+    if (processingLeads.has(lead.id)) {
+      logger.warn('[WA_SKIP] Lead already processing, message saved but skipping AI', { leadId: lead.id });
       return;
     }
 
-    // Call Claude API with agentic loop (automatic tool execution)
-    const agentResult = await ClaudeService.sendMessageWithToolLoop(
-      lead,
-      conversationHistory,
-      toolExecutor
-    );
+    processingLeads.add(lead.id);
 
-    // Save bot message
-    const botMessage = await MessageService.createBotMessage(
-      lead.id,
-      agentResult.content,
-      agentResult.totalUsage.totalTokens,
-      agentResult.model,
-      agentResult.responseTimeMs,
-      agentResult.executedToolCalls.map(tc => tc.name),
-      conversationId,
-    );
-
-    // Send response via WhatsApp
-    await WhatsAppService.sendTextMessage(phone, agentResult.content);
-
-    // Send interactive message if requested
-    if (interactiveMessage) {
-      await WhatsAppService.sendInteractiveMessage(phone, interactiveMessage);
-    }
-
-    const duration = Date.now() - startTime;
-    logger.info('Message processed successfully', {
-      leadId: lead.id,
-      duration,
-      tokens: agentResult.totalUsage.totalTokens,
-      toolCalls: agentResult.executedToolCalls.length,
-      apiCalls: agentResult.apiCallCount,
-      statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
-    });
-
-    // Realtime side-effects — fire and forget, after all mutations complete
     try {
-      const wss = getWebSocketServer();
-      if (wss) {
-        const tenantId = await getAccountIdByLeadId(lead.id);
-        if (tenantId) {
-          if (created) {
-            emitLeadCreated(wss, lead.id, tenantId);
-          }
+      // Get conversation history for Claude
+      const conversationHistory = await MessageService.getConversationForClaude(lead.id, 20);
 
-          if (conv) {
-            emitMessageNew(wss, conv.id, userMessage.id, tenantId);
-            emitMessageNew(wss, conv.id, botMessage.id, tenantId);
-          }
+      // Track lead state changes and interactive messages
+      let updatedLead = lead;
+      let interactiveMessage: WhatsAppService.WhatsAppInteractive | null = null;
 
-          // Emit lead:updated if AI tool changed lead state
-          if (updatedLead.status !== lead.status || updatedLead.lead_state !== lead.lead_state) {
-            emitLeadUpdated(wss, lead.id, tenantId);
-          }
-
-          emitOverviewRefresh(wss, tenantId);
-        } else {
-          logger.warn('Could not resolve accountId for lead — skipping realtime', { leadId: lead.id });
+      // Create tool executor function
+      const toolExecutor: ToolExecutor = async (toolCall) => {
+        if (toolCall.name === 'update_lead_state') {
+          updatedLead = await processUpdateLeadState(lead.id, toolCall.input, messageText);
+          return { result: JSON.stringify({ success: true, leadId: lead.id }) };
+        } else if (toolCall.name === 'send_interactive_message') {
+          interactiveMessage = processInteractiveMessage(toolCall.input);
+          return { result: JSON.stringify({ success: true, messageQueued: !!interactiveMessage }) };
         }
-      }
-    } catch (emitError) {
-      logger.warn('Realtime emit failed', { error: emitError, leadId: lead.id });
-    }
+        return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
+      };
 
-    // Telemetry — fire and forget, never await in main path
-    void logTelemetry({
-      ...agentResult.telemetry,
-      lead_id: lead.id,
-      conversation_id: conv?.id ?? null,
-      message_id: botMessage.id,
-      prompt_version_id: null,
-    }).catch((err) => {
-      logger.warn('Telemetry write failed', { error: err, leadId: lead.id });
-    });
+      // ── Empty input guard — skip AI call for empty/whitespace messages ──
+      if (!messageText.trim()) {
+        const fallbackResponse = 'היי! 😊 במה אפשר לעזור?';
+        const botMessage = await MessageService.createBotMessage(
+          lead.id, fallbackResponse, 0, 'fallback', 0, [], conversationId,
+        );
+        await WhatsAppService.sendTextMessage(phone, fallbackResponse);
+        logger.info('[WA_SKIP] Empty input guard triggered', { leadId: lead.id });
+        // Update conversation denormalized fields
+        if (conversationId) {
+          await updateConversationStats(conversationId, fallbackResponse);
+        }
+        // Emit WS events
+        try {
+          const wss = getWebSocketServer();
+          if (wss && conv) {
+            const tenantId = await getAccountIdByLeadId(lead.id);
+            if (tenantId) {
+              emitMessageNew(wss, conv.id, userMessage.id, tenantId);
+              emitMessageNew(wss, conv.id, botMessage.id, tenantId);
+              emitOverviewRefresh(wss, tenantId);
+            }
+          }
+        } catch { /* ignore emit errors */ }
+        return;
+      }
+
+      // ── AI call with robust error handling ──
+      let agentResult: Awaited<ReturnType<typeof ClaudeService.sendMessageWithToolLoop>>;
+      try {
+        logger.info('[WA_AI] Calling Claude', { leadId: lead.id, historyLen: conversationHistory.length });
+
+        agentResult = await ClaudeService.sendMessageWithToolLoop(
+          lead,
+          conversationHistory,
+          toolExecutor
+        );
+      } catch (aiError) {
+        logger.error('[WA_ERR] AI call failed', {
+          leadId: lead.id,
+          error: (aiError as Error).message,
+        });
+
+        // Save error fallback message to DB and send to user
+        const errorResponse = 'סליחה, נתקלתי בבעיה טכנית. אנא נסה שוב בעוד כמה דקות. 🙏';
+        try {
+          await MessageService.createBotMessage(
+            lead.id, errorResponse, 0, 'error-fallback', 0, [], conversationId,
+          );
+          if (conversationId) {
+            await updateConversationStats(conversationId, errorResponse);
+          }
+        } catch { /* best effort */ }
+
+        try {
+          await WhatsAppService.sendTextMessage(phone, errorResponse);
+        } catch { /* best effort */ }
+
+        return; // Don't rethrow — we already sent 200 OK
+      }
+
+      // Save bot message
+      const botMessage = await MessageService.createBotMessage(
+        lead.id,
+        agentResult.content,
+        agentResult.totalUsage.totalTokens,
+        agentResult.model,
+        agentResult.responseTimeMs,
+        agentResult.executedToolCalls.map(tc => tc.name),
+        conversationId,
+      );
+
+      logger.info('[WA_SAVE] Bot message saved', { leadId: lead.id, messageId: botMessage.id });
+
+      // Update conversation denormalized fields
+      if (conversationId) {
+        await updateConversationStats(conversationId, agentResult.content);
+      }
+
+      // Send response via WhatsApp
+      await WhatsAppService.sendTextMessage(phone, agentResult.content);
+
+      // Send interactive message if requested
+      if (interactiveMessage) {
+        await WhatsAppService.sendInteractiveMessage(phone, interactiveMessage);
+      }
+
+      const duration = Date.now() - startTime;
+      logger.info('[WA_OUT] Message processed', {
+        leadId: lead.id,
+        duration,
+        tokens: agentResult.totalUsage.totalTokens,
+        toolCalls: agentResult.executedToolCalls.length,
+        apiCalls: agentResult.apiCallCount,
+        statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
+      });
+
+      // Realtime side-effects — fire and forget, after all mutations complete
+      try {
+        const wss = getWebSocketServer();
+        if (wss) {
+          const tenantId = await getAccountIdByLeadId(lead.id);
+          if (tenantId) {
+            if (created) {
+              emitLeadCreated(wss, lead.id, tenantId);
+            }
+
+            if (conv) {
+              emitMessageNew(wss, conv.id, userMessage.id, tenantId);
+              emitMessageNew(wss, conv.id, botMessage.id, tenantId);
+            }
+
+            // Emit lead:updated if AI tool changed lead state
+            if (updatedLead.status !== lead.status || updatedLead.lead_state !== lead.lead_state) {
+              emitLeadUpdated(wss, lead.id, tenantId);
+            }
+
+            emitOverviewRefresh(wss, tenantId);
+          } else {
+            logger.warn('[WA_ERR] Could not resolve accountId — skipping realtime', { leadId: lead.id });
+          }
+        }
+      } catch (emitError) {
+        logger.warn('[WA_ERR] Realtime emit failed', { error: emitError, leadId: lead.id });
+      }
+
+      // Telemetry — fire and forget, never await in main path
+      void logTelemetry({
+        ...agentResult.telemetry,
+        lead_id: lead.id,
+        conversation_id: conv?.id ?? null,
+        message_id: botMessage.id,
+        prompt_version_id: null,
+      }).catch((err) => {
+        logger.warn('[WA_ERR] Telemetry write failed', { error: err, leadId: lead.id });
+      });
+
+    } finally {
+      processingLeads.delete(lead.id);
+    }
 
   } catch (error) {
-    logger.error('Error processing message', {
+    logger.error('[WA_ERR] Unhandled error in processMessage', {
       messageId: message.id,
       error: (error as Error).message,
       stack: (error as Error).stack,
@@ -433,6 +494,28 @@ async function processMessage(
     } catch {
       // Ignore error sending error message
     }
+  }
+}
+
+/**
+ * Update conversation denormalized fields (message_count, last_message, last_message_at)
+ */
+async function updateConversationStats(conversationId: string, lastMessage: string): Promise<void> {
+  try {
+    await query(
+      `UPDATE conversations
+       SET message_count = message_count + 2,
+           last_message = $1,
+           last_message_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $2`,
+      [lastMessage.substring(0, 500), conversationId],
+    );
+  } catch (err) {
+    logger.warn('[WA_ERR] Failed to update conversation stats', {
+      conversationId,
+      error: (err as Error).message,
+    });
   }
 }
 

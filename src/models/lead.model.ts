@@ -315,6 +315,14 @@ export async function update(
     'last_user_message_at',
     'last_bot_message_at',
     'last_followup_sent_at',
+    'lead_state',
+    'follow_up_scheduled_at',
+    'follow_up_type',
+    'follow_up_count',
+    'follow_up_priority',
+    'trial_scheduled_at',
+    'trial_completed_at',
+    'human_contacted_at',
   ];
 
   for (const field of overwriteFields) {
