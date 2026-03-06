@@ -326,7 +326,7 @@ async function processMessage(
 
       // Track lead state changes and interactive messages
       let updatedLead = lead;
-      let interactiveMessage: WhatsAppService.WhatsAppInteractive | null = null;
+      let interactiveResult: InteractiveResult | null = null;
 
       // Create tool executor function
       const toolExecutor: ToolExecutor = async (toolCall) => {
@@ -334,8 +334,8 @@ async function processMessage(
           updatedLead = await processUpdateLeadState(lead.id, toolCall.input, messageText);
           return { result: JSON.stringify({ success: true, leadId: lead.id }) };
         } else if (toolCall.name === 'send_interactive_message') {
-          interactiveMessage = processInteractiveMessage(toolCall.input);
-          return { result: JSON.stringify({ success: true, messageQueued: !!interactiveMessage }) };
+          interactiveResult = processInteractiveMessage(toolCall.input);
+          return { result: JSON.stringify({ success: true, messageQueued: !!interactiveResult }) };
         }
         return { result: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }), isError: true };
       };
@@ -424,9 +424,25 @@ async function processMessage(
       // Send response via WhatsApp
       await WhatsAppService.sendTextMessage(phone, agentResult.content);
 
-      // Send interactive message if requested
-      if (interactiveMessage) {
-        await WhatsAppService.sendInteractiveMessage(phone, interactiveMessage);
+      // Send interactive message if requested (cast needed: TS can't track closure mutation)
+      const ir = interactiveResult as InteractiveResult | null;
+      if (ir) {
+        // Save interactive display content to DB
+        await MessageService.createBotMessage(
+          lead.id,
+          ir.displayContent,
+          0,
+          agentResult.model,
+          0,
+          ['send_interactive_message'],
+          conversationId,
+        );
+
+        await WhatsAppService.sendInteractiveWithFallback(
+          phone,
+          ir.interactive,
+          ir.fallbackText,
+        );
       }
 
       const duration = Date.now() - startTime;
@@ -437,6 +453,7 @@ async function processMessage(
         tokens: agentResult.totalUsage.totalTokens,
         toolCalls: agentResult.executedToolCalls.length,
         apiCalls: agentResult.apiCallCount,
+        interactiveType: ir?.interactive.type ?? null,
         statusChange: updatedLead.status !== lead.status ? `${lead.status} -> ${updatedLead.status}` : null,
       });
 
@@ -678,28 +695,67 @@ async function processUpdateLeadState(
 }
 
 /**
+ * Result from processing an interactive message tool call
+ */
+interface InteractiveResult {
+  interactive: WhatsAppService.WhatsAppInteractive;
+  fallbackText: string;
+  displayContent: string;
+}
+
+/**
  * Process send_interactive_message tool call
  */
 function processInteractiveMessage(
   input: Record<string, unknown>
-): WhatsAppService.WhatsAppInteractive | null {
+): InteractiveResult | null {
   try {
-    const type = input.type as 'button' | 'list';
-    const body = input.body as string;
-    const buttons = input.buttons as Array<{ id: string; title: string }> | undefined;
-    const header = input.header as string | undefined;
-    const footer = input.footer as string | undefined;
+    const messageType = input.message_type as string;
+    const bodyText = input.body_text as string;
 
-    if (!type || !body) {
+    if (!messageType || !bodyText) {
       logger.warn('Invalid interactive message input', { input });
       return null;
     }
 
-    if (type === 'button' && buttons) {
-      return WhatsAppService.buildButtonMessage(body, buttons, { header, footer });
+    if (messageType === 'reply_buttons') {
+      const buttons = input.reply_buttons as Array<{ id: string; title: string }>;
+      if (!buttons || buttons.length === 0) return null;
+      const labels = buttons.map(b => b.title).join(', ');
+      return {
+        interactive: WhatsAppService.buildButtonMessage(bodyText, buttons),
+        fallbackText: bodyText,
+        displayContent: `${bodyText}\n[כפתורים: ${labels}]`,
+      };
     }
 
-    // Add list support if needed
+    if (messageType === 'list') {
+      const listButtonText = input.list_button_text as string;
+      const sections = input.list_sections as Array<{
+        title?: string;
+        rows: Array<{ id: string; title: string }>;
+      }>;
+      if (!sections || sections.length === 0 || !listButtonText) return null;
+      const rowLabels = sections.flatMap(s => s.rows.map(r => r.title)).join(', ');
+      return {
+        interactive: WhatsAppService.buildListMessage(bodyText, listButtonText, sections),
+        fallbackText: bodyText,
+        displayContent: `${bodyText}\n[רשימה: ${rowLabels}]`,
+      };
+    }
+
+    if (messageType === 'cta_url') {
+      const ctaUrl = input.cta_url as string;
+      const ctaDisplayText = input.cta_display_text as string;
+      if (!ctaUrl || !ctaDisplayText) return null;
+      return {
+        interactive: WhatsAppService.buildCtaUrlMessage(bodyText, ctaDisplayText, ctaUrl),
+        fallbackText: `${bodyText}\n${ctaUrl}`,
+        displayContent: `${bodyText}\n[לינק: ${ctaDisplayText} → ${ctaUrl}]`,
+      };
+    }
+
+    logger.warn('Unknown interactive message_type', { messageType });
     return null;
   } catch (error) {
     logger.error('Error building interactive message', { error, input });

@@ -557,7 +557,17 @@ Call when you learn new information:
 **CRITICAL: NEVER set status to 'booked'. Only Calendly polling can do that.**
 
 ## Tool: send_interactive_message
-Use for booking buttons with Calendly link (from TUTOR_PROFILE).
+Use for WhatsApp buttons. Types: reply_buttons, list, cta_url.
+
+USE buttons for:
+- Format choice after qualification: reply_buttons ["זום","פרונטלי"]
+- Booking CTA when ready: cta_url with calendly_link from TUTOR_PROFILE
+- Subject selection if multiple subjects: list
+
+DO NOT use buttons for:
+- First message (always text with AI disclosure)
+- Objection handling (needs free text)
+- When only 1 option exists
 
 # CONTEXT
 

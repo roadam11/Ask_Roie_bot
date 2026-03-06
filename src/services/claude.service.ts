@@ -224,52 +224,72 @@ FOLLOW-UP AUTOMATION: When user says "אחשוב על זה" / "אני צריך �
  */
 const SEND_INTERACTIVE_MESSAGE_TOOL: Anthropic.Tool = {
   name: 'send_interactive_message',
-  description: `Send an interactive WhatsApp message with buttons. Use this for:
-- Sending Calendly booking link
-- Offering format choice (Zoom vs Frontal)
-- Quick reply options
+  description: `Send an interactive WhatsApp message. Types: reply_buttons, list, cta_url.
+- reply_buttons: up to 3 quick-reply buttons
+- list: expandable list with sections and rows
+- cta_url: single CTA button linking to a URL (e.g. Calendly)
 
 The message will be sent after your text response.`,
   input_schema: {
     type: 'object' as const,
     properties: {
-      type: {
+      message_type: {
         type: 'string',
-        enum: ['button', 'list'],
+        enum: ['reply_buttons', 'list', 'cta_url'],
         description: 'Type of interactive message',
       },
-      body: {
+      body_text: {
         type: 'string',
         description: 'Main message body text',
       },
-      buttons: {
+      reply_buttons: {
         type: 'array',
         items: {
           type: 'object',
           properties: {
-            id: {
-              type: 'string',
-              description: 'Button identifier',
-            },
-            title: {
-              type: 'string',
-              description: 'Button label (max 20 chars)',
-            },
+            id: { type: 'string', description: 'Button identifier' },
+            title: { type: 'string', description: 'Button label (max 20 chars)' },
           },
           required: ['id', 'title'],
         },
-        description: 'Buttons for interactive message (max 3)',
+        description: 'Buttons for reply_buttons type (max 3)',
       },
-      header: {
+      list_button_text: {
         type: 'string',
-        description: 'Optional header text',
+        description: 'Text on the list open button (max 20 chars, for list type)',
       },
-      footer: {
+      list_sections: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Section title' },
+            rows: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: 'Row identifier' },
+                  title: { type: 'string', description: 'Row title (max 24 chars)' },
+                },
+                required: ['id', 'title'],
+              },
+            },
+          },
+          required: ['rows'],
+        },
+        description: 'Sections for list type (max 3 sections)',
+      },
+      cta_url: {
         type: 'string',
-        description: 'Optional footer text',
+        description: 'URL for cta_url type (e.g. Calendly link)',
+      },
+      cta_display_text: {
+        type: 'string',
+        description: 'Button text for cta_url type (max 20 chars)',
       },
     },
-    required: ['type', 'body'],
+    required: ['message_type', 'body_text'],
   },
 };
 
@@ -1241,25 +1261,52 @@ export function validateInteractiveMessageInput(
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!input.type || !['button', 'list'].includes(input.type as string)) {
-    errors.push('Invalid or missing type');
+  const messageType = input.message_type as string | undefined;
+  if (!messageType || !['reply_buttons', 'list', 'cta_url'].includes(messageType)) {
+    errors.push('Invalid or missing message_type');
   }
 
-  if (!input.body || typeof input.body !== 'string') {
-    errors.push('Missing body text');
+  if (!input.body_text || typeof input.body_text !== 'string') {
+    errors.push('Missing body_text');
   }
 
-  if (input.buttons && Array.isArray(input.buttons)) {
-    if (input.buttons.length > 3) {
-      errors.push('Maximum 3 buttons allowed');
+  if (messageType === 'reply_buttons') {
+    const buttons = input.reply_buttons as Array<{ id?: string; title?: string }> | undefined;
+    if (!buttons || !Array.isArray(buttons) || buttons.length === 0) {
+      errors.push('reply_buttons type requires reply_buttons array');
+    } else {
+      if (buttons.length > 3) {
+        errors.push('Maximum 3 reply_buttons allowed');
+      }
+      for (const btn of buttons) {
+        if (!btn.id || !btn.title) {
+          errors.push('Each button must have id and title');
+        }
+        if (btn.title && btn.title.length > 20) {
+          errors.push(`Button title too long: ${btn.title}`);
+        }
+      }
     }
-    for (const btn of input.buttons as Array<{ id?: string; title?: string }>) {
-      if (!btn.id || !btn.title) {
-        errors.push('Each button must have id and title');
-      }
-      if (btn.title && btn.title.length > 20) {
-        errors.push(`Button title too long: ${btn.title}`);
-      }
+  }
+
+  if (messageType === 'list') {
+    const sections = input.list_sections as Array<unknown> | undefined;
+    if (!sections || !Array.isArray(sections) || sections.length === 0) {
+      errors.push('list type requires list_sections array');
+    } else if (sections.length > 3) {
+      errors.push('Maximum 3 list_sections allowed');
+    }
+    if (!input.list_button_text || typeof input.list_button_text !== 'string') {
+      errors.push('list type requires list_button_text');
+    }
+  }
+
+  if (messageType === 'cta_url') {
+    if (!input.cta_url || typeof input.cta_url !== 'string') {
+      errors.push('cta_url type requires cta_url string');
+    }
+    if (!input.cta_display_text || typeof input.cta_display_text !== 'string') {
+      errors.push('cta_url type requires cta_display_text string');
     }
   }
 

@@ -51,7 +51,7 @@ interface WhatsAppListSection {
  * WhatsApp interactive message payload
  */
 export interface WhatsAppInteractive {
-  type: 'button' | 'list';
+  type: 'button' | 'list' | 'cta_url';
   header?: {
     type: 'text';
     text: string;
@@ -66,6 +66,8 @@ export interface WhatsAppInteractive {
     buttons?: WhatsAppButton[];
     button?: string; // For list: "Select an option"
     sections?: WhatsAppListSection[];
+    name?: 'cta_url';
+    parameters?: { display_text: string; url: string };
   };
 }
 
@@ -462,6 +464,16 @@ function validateInteractiveMessage(interactive: WhatsAppInteractive): void {
     }
   }
 
+  if (interactive.type === 'cta_url') {
+    const params = interactive.action.parameters;
+    if (!params?.url) {
+      throw new Error('CTA URL interactive message requires a URL');
+    }
+    if (params.display_text && params.display_text.length > 20) {
+      throw new Error(`CTA display text exceeds 20 chars: "${params.display_text}"`);
+    }
+  }
+
   if (interactive.body.text.length > 1024) {
     throw new Error('Interactive body text exceeds 1024 chars');
   }
@@ -568,6 +580,47 @@ export function buildListMessage(
       })),
     },
   };
+}
+
+/**
+ * Build a CTA URL interactive message
+ */
+export function buildCtaUrlMessage(
+  bodyText: string,
+  displayText: string,
+  url: string,
+): WhatsAppInteractive {
+  return {
+    type: 'cta_url',
+    body: { text: bodyText },
+    action: {
+      name: 'cta_url',
+      parameters: {
+        display_text: displayText.substring(0, 20),
+        url,
+      },
+    },
+  };
+}
+
+/**
+ * Send an interactive message with text fallback on failure
+ */
+export async function sendInteractiveWithFallback(
+  phone: string,
+  interactive: WhatsAppInteractive,
+  fallbackText: string,
+): Promise<string> {
+  try {
+    return await sendInteractiveMessage(phone, interactive);
+  } catch (error) {
+    logger.warn('Interactive message failed, sending text fallback', {
+      phone: maskPhone(phone),
+      type: interactive.type,
+      error: (error as Error).message,
+    });
+    return await sendTextMessage(phone, fallbackText);
+  }
 }
 
 // ============================================================================
