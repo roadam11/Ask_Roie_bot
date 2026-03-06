@@ -23,6 +23,7 @@ import {
   mustUseTemplate,
 } from '../utils/whatsapp-window.js';
 import { buildFollowUpMessage } from '../prompts/follow-up-messages.js';
+import { loadSettingsForLead } from '../services/settings.service.js';
 import { markFollowUpSent } from '../services/follow-up-decision.service.js';
 import logger from '../utils/logger.js';
 import type { Lead, AutomationFollowUpType } from '../types/index.js';
@@ -356,6 +357,15 @@ async function processAutomationFollowUp(
     const placeholders: Record<string, string> = {};
     if (trialTime) placeholders.time = trialTime;
     if (zoomLink) placeholders.zoom_link = zoomLink;
+
+    // Load tenant booking link for {booking_link} placeholder
+    try {
+      const settings = await loadSettingsForLead(leadId);
+      const bookingLink = (settings?.profile as Record<string, unknown>)?.calendly_link;
+      if (typeof bookingLink === 'string' && bookingLink.trim()) {
+        placeholders.booking_link = bookingLink.trim();
+      }
+    } catch { /* non-critical — message sends without link */ }
 
     const message = buildFollowUpMessage(type, placeholders);
 
