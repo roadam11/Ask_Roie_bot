@@ -5,6 +5,15 @@
 import { Response } from 'express';
 import { query, queryOne } from '../../database/connection.js';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import * as WhatsAppService from '../../services/whatsapp.service.js';
+import * as MessageService from '../../services/message.service.js';
+import { getWebSocketServer } from '../../realtime/ws-server.js';
+import {
+  emitMessageNew,
+  emitConversationUpdated,
+  emitOverviewRefresh,
+} from '../../realtime/emitter.js';
+import logger from '../../utils/logger.js';
 
 // Search
 export async function searchConversations(req: AuthenticatedRequest, res: Response) {
@@ -334,4 +343,136 @@ export async function exportConversations(req: AuthenticatedRequest, res: Respon
   const conversations = result.rows;
 
   return res.json({ count: conversations.length, data: conversations });
+}
+
+// ============================================================================
+// Human Takeover
+// ============================================================================
+
+/**
+ * POST /api/conversations/:id/takeover
+ * Admin takes over conversation — AI stops responding.
+ */
+export async function takeoverConversation(req: AuthenticatedRequest, res: Response) {
+  const { id } = req.params;
+  const accountId = req.user?.accountId;
+  const adminId = req.user?.id;
+
+  await query(
+    'UPDATE conversations SET ai_active = false, taken_over_by = $1, taken_over_at = NOW() WHERE id = $2',
+    [adminId, id],
+  );
+
+  // Broadcast
+  try {
+    const wss = getWebSocketServer();
+    if (wss && accountId) {
+      emitConversationUpdated(wss, id, 'open', accountId);
+      emitOverviewRefresh(wss, accountId);
+    }
+  } catch { /* ignore */ }
+
+  logger.info(`[TAKEOVER] conversation_id=${id} admin=${adminId} action=takeover`);
+  return res.json({ success: true, ai_active: false });
+}
+
+/**
+ * POST /api/conversations/:id/resume
+ * Resume AI on conversation after takeover.
+ */
+export async function resumeAI(req: AuthenticatedRequest, res: Response) {
+  const { id } = req.params;
+  const accountId = req.user?.accountId;
+
+  await query(
+    'UPDATE conversations SET ai_active = true, taken_over_by = NULL, taken_over_at = NULL WHERE id = $1',
+    [id],
+  );
+
+  // Broadcast
+  try {
+    const wss = getWebSocketServer();
+    if (wss && accountId) {
+      emitConversationUpdated(wss, id, 'open', accountId);
+      emitOverviewRefresh(wss, accountId);
+    }
+  } catch { /* ignore */ }
+
+  logger.info(`[TAKEOVER] conversation_id=${id} action=resume`);
+  return res.json({ success: true, ai_active: true });
+}
+
+/**
+ * POST /api/conversations/:id/send
+ * Admin sends a message directly to the user via WhatsApp.
+ */
+export async function adminSendMessage(req: AuthenticatedRequest, res: Response) {
+  const { id } = req.params;
+  const { message } = req.body;
+
+  if (!message?.trim()) {
+    return res.status(400).json({ error: 'Message required' });
+  }
+
+  // Get lead phone from conversation
+  const conv = await queryOne<{ lead_id: string; account_id: string }>(
+    `SELECT c.lead_id, a.account_id
+     FROM conversations c
+     JOIN leads l ON l.id = c.lead_id
+     LEFT JOIN agents ag ON l.agent_id = ag.id
+     LEFT JOIN accounts a ON ag.account_id = a.id
+     WHERE c.id = $1`,
+    [id],
+  );
+
+  if (!conv) {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+
+  const lead = await queryOne<{ phone: string }>(
+    'SELECT phone FROM leads WHERE id = $1',
+    [conv.lead_id],
+  );
+
+  if (!lead?.phone) {
+    return res.status(404).json({ error: 'Lead phone not found' });
+  }
+
+  // Send via WhatsApp
+  await WhatsAppService.sendTextMessage(lead.phone, message);
+
+  // Save to DB
+  const botMsg = await MessageService.createBotMessage(
+    conv.lead_id,
+    message,
+    0,
+    'human-admin',
+    0,
+    [],
+    id,
+  );
+
+  // Update conversation stats
+  try {
+    await query(
+      `UPDATE conversations
+       SET message_count = message_count + 1,
+           last_message = $1,
+           last_message_at = NOW()
+       WHERE id = $2`,
+      [message.substring(0, 500), id],
+    );
+  } catch { /* best effort */ }
+
+  // Broadcast
+  try {
+    const wss = getWebSocketServer();
+    if (wss && conv.account_id) {
+      emitMessageNew(wss, id, botMsg.id, conv.account_id);
+      emitOverviewRefresh(wss, conv.account_id);
+    }
+  } catch { /* ignore */ }
+
+  logger.info(`[ADMIN_MSG] conversation_id=${id} msg_length=${message.length}`);
+  return res.json({ success: true });
 }

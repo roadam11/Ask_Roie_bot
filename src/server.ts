@@ -130,6 +130,7 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
 import { attachWebSocketServer } from './realtime/ws-server.js';
 import whatsappRoutes from './api/routes/whatsapp.routes.js';
 import telegramRoutes from './api/routes/telegram.routes.js';
+import calendlyRoutes from './api/routes/calendly.routes.js';
 import adminRoutes from './api/routes/admin.routes.js';
 import authRoutes from './api/routes/auth.routes.js';
 import crmRoutes from './api/routes/crm.routes.js';
@@ -145,6 +146,9 @@ app.use('/webhook/whatsapp', whatsappRoutes);
 
 // Telegram webhook routes
 app.use('/webhook/telegram', telegramRoutes);
+
+// Calendly webhook routes (NOT behind auth — external webhook)
+app.use('/webhook/calendly', calendlyRoutes);
 
 // Admin routes (protected with Basic Auth)
 app.use('/admin', adminAuth, adminRoutes);

@@ -227,6 +227,40 @@ router.get('/conversations/qa/patterns', ConversationsController.getFailurePatte
 router.get('/conversations/qa/ab-tests', ConversationsController.getABTestResults);
 
 // ============================================================================
+// Human Takeover
+// ============================================================================
+
+/**
+ * POST /api/conversations/:id/takeover
+ * Admin takes over conversation — AI stops responding.
+ */
+router.post(
+  '/conversations/:id/takeover',
+  writeRateLimiter,
+  ConversationsController.takeoverConversation
+);
+
+/**
+ * POST /api/conversations/:id/resume
+ * Resume AI on conversation after admin takeover.
+ */
+router.post(
+  '/conversations/:id/resume',
+  writeRateLimiter,
+  ConversationsController.resumeAI
+);
+
+/**
+ * POST /api/conversations/:id/send
+ * Admin sends a message directly to the user via WhatsApp.
+ */
+router.post(
+  '/conversations/:id/send',
+  writeRateLimiter,
+  ConversationsController.adminSendMessage
+);
+
+// ============================================================================
 // Export
 // ============================================================================
 

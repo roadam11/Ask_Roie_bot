@@ -299,8 +299,8 @@ async function processMessage(
     }
 
     // Look up active conversation for linking messages
-    const conv = await queryOne<{ id: string }>(
-      `SELECT id FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
+    const conv = await queryOne<{ id: string; ai_active: boolean }>(
+      `SELECT id, COALESCE(ai_active, true) as ai_active FROM conversations WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
       [lead.id],
     );
     const conversationId = conv?.id;
@@ -311,6 +311,27 @@ async function processMessage(
     const userMessage = await MessageService.createUserMessage(lead.id, messageText, whatsappMessageId, conversationId);
 
     logger.info('[WA_SAVE] User message saved', { trace, leadId: lead.id, messageId: userMessage.id });
+
+    // ── Human takeover guard: skip AI when admin has taken over ──
+    if (conv && conv.ai_active === false) {
+      // Update conversation stats so admin sees latest message
+      if (conversationId) {
+        await updateConversationStats(conversationId, messageText);
+      }
+      // Notify Dashboard in real-time
+      try {
+        const wss = getWebSocketServer();
+        if (wss) {
+          const tenantId = await getAccountIdByLeadId(lead.id);
+          if (tenantId) {
+            emitMessageNew(wss, conversationId!, userMessage.id, tenantId);
+            emitOverviewRefresh(wss, tenantId);
+          }
+        }
+      } catch { /* ignore emit errors */ }
+      logger.info(`[WA_SKIP] trace=${trace} reason=human_takeover lead_id=${lead.id}`);
+      return; // Do NOT call AI
+    }
 
     // ── Mutex: skip AI call if this lead is already being processed ──
     if (processingLeads.has(lead.id)) {
