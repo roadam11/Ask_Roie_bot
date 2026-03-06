@@ -16,7 +16,7 @@ process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'error'; // Minimize log noise in tests
 
 // Database
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || 'postgresql://localhost:5432/ask_roie_test';
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || 'postgresql://localhost:5432/conversai_test';
 
 // API Keys (use test/mock values)
 process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-for-testing-only-not-real';

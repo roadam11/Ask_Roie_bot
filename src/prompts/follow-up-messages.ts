@@ -13,7 +13,10 @@ import type { AutomationFollowUpType } from '../types/index.js';
 // Constants
 // ============================================================================
 
-export const CALENDLY_LINK = 'https://calendly.com/roadam11/meet-with-me';
+/**
+ * @deprecated Use {booking_link} placeholder — resolved at send time from tenant settings.
+ */
+const BOOKING_LINK_PLACEHOLDER = '{booking_link}';
 
 // Priority levels (0-100, higher = more important)
 export const FOLLOW_UP_PRIORITIES: Record<AutomationFollowUpType, number> = {
@@ -46,6 +49,7 @@ export interface FollowUpMessageConfig {
  * - {zoom_link} - Zoom meeting link
  * - {name} - Lead's name (if known)
  * - {subject} - Subject they're interested in
+ * - {booking_link} - Tenant's booking link (from settings.profile.calendly_link)
  */
 export const FOLLOW_UP_MESSAGES: Record<AutomationFollowUpType, FollowUpMessageConfig> = {
   /**
@@ -58,10 +62,10 @@ export const FOLLOW_UP_MESSAGES: Record<AutomationFollowUpType, FollowUpMessageC
     text: `היי! בדיוק סיימתי להעביר שיעור על אנרגיה ומכניקה ונזכרתי בשיחה שלנו. הרבה תלמידים מסתבכים שם כי מנסים לשנן במקום להבין את העיקרון.
 
 בכל מקרה, אם החלטת שאתה רוצה לעשות סדר ולקפוץ למים, השבוע נשארו לי 2 משבצות אחרונות לשיעורי ניסיון. הנה הלינק לתיאום:
-${CALENDLY_LINK}`,
+${BOOKING_LINK_PLACEHOLDER}`,
     priority: FOLLOW_UP_PRIORITIES.thinking_24h,
     description: '24h after user said they need to think - scarcity play',
-    placeholders: [],
+    placeholders: ['booking_link'],
   },
 
   /**
@@ -93,10 +97,10 @@ ${CALENDLY_LINK}`,
 אשמח לשמוע איך הרגשת ואם יש משהו שתרצה לשפר.
 
 אם תרצה להמשיך באופן קבוע, אפשר לשריין מקום כאן:
-${CALENDLY_LINK}`,
+${BOOKING_LINK_PLACEHOLDER}`,
     priority: FOLLOW_UP_PRIORITIES.trial_followup_24h,
     description: '24h after trial - convert to paying student',
-    placeholders: [],
+    placeholders: ['booking_link'],
   },
 
   /**

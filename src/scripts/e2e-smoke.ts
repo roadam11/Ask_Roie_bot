@@ -1,7 +1,7 @@
 /**
  * E2E Smoke Test Script
  *
- * Validates the full Ask ROIE system end-to-end:
+ * Validates the full ConversAI system end-to-end:
  *   Phase 1: Health & Connectivity
  *   Phase 2: Authentication
  *   Phase 3: CRM Data
@@ -11,11 +11,11 @@
  *
  * Usage:
  *   npx tsx src/scripts/e2e-smoke.ts http://localhost:3000
- *   npx tsx src/scripts/e2e-smoke.ts https://ask-roie-bot-production.up.railway.app
+ *   npx tsx src/scripts/e2e-smoke.ts https://your-deployment-url.up.railway.app
  *   npm run e2e -- http://localhost:3000
  *
  * Environment variables (with fallback defaults):
- *   ADMIN_EMAIL    — login email    (default: admin@askroie.com)
+ *   ADMIN_EMAIL    — login email    (default: admin@conversai.com)
  *   ADMIN_PASSWORD — login password (default: Admin1234!)
  */
 
@@ -143,7 +143,7 @@ if (!BASE_URL) {
   process.exit(1);
 }
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@askroie.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@conversai.com';
 const ADMIN_PASS  = process.env.ADMIN_PASSWORD || 'Admin1234!';
 
 // ============================================================================
@@ -676,7 +676,7 @@ async function main(): Promise<void> {
   const startTime = Date.now();
   const now = new Date().toISOString();
 
-  console.log('\n\ud83d\udd0d ASK ROIE \u2014 E2E Smoke Test');
+  console.log('\n\ud83d\udd0d ConversAI \u2014 E2E Smoke Test');
   console.log(`   Target: ${BASE_URL}`);
   console.log(`   Time:   ${now}`);
   console.log(`   Auth:   ${ADMIN_EMAIL}`);

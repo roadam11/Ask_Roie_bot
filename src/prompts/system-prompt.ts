@@ -1,16 +1,16 @@
 /**
- * Ask ROIE Bot - System Prompt
- * WhatsApp AI Sales Agent for Ask ROIE tutoring service
+ * ConversAI — System Prompt
+ * Multi-tenant WhatsApp AI Sales Agent
  */
 
 import type { Lead } from '../types/index.js';
 import type { AccountSettings } from '../services/settings.service.js';
 
 /**
- * @deprecated Use TUTOR_PROFILE.calendly_link from database instead.
- * Kept only for follow-up-messages.ts backward compatibility.
+ * @deprecated Removed — booking link comes from tenant settings (profile.calendly_link).
+ * Follow-up messages now use {booking_link} placeholder resolved at send time.
  */
-export const CALENDLY_LINK = 'https://calendly.com/roadam11/meet-with-me';
+export const CALENDLY_LINK = '';
 
 /**
  * @deprecated Renamed to LEGACY_ROIE_PROMPT. Use GENERIC_SALES_PROMPT instead.

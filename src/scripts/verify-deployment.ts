@@ -27,7 +27,7 @@ import { createClient } from 'redis';
 // ============================================================================
 
 const EXPECTED_SERVICES = [
-  { name: 'Ask Roie bot', type: 'main', critical: true },
+  { name: 'conversai-bot', type: 'main', critical: true },
   { name: 'calendly-worker', type: 'worker', critical: true },
   { name: 'scheduler', type: 'worker', critical: true },
   { name: 'followup-worker', type: 'worker', critical: true },

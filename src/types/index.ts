@@ -1,6 +1,6 @@
 /**
- * Ask ROIE Bot - TypeScript Type Definitions
- * WhatsApp AI Sales Agent for Ask ROIE tutoring service
+ * ConversAI — TypeScript Type Definitions
+ * Multi-tenant WhatsApp AI Sales Agent
  */
 
 // ============================================================================

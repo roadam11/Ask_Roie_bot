@@ -1,7 +1,7 @@
 /**
- * Ask ROIE Bot - Express Server
+ * ConversAI — Express Server
  *
- * WhatsApp AI Sales Agent for Ask ROIE tutoring service.
+ * Multi-tenant WhatsApp AI Sales Agent.
  *
  * @description Main entry point for the Express server.
  * Handles WhatsApp webhooks, admin endpoints, and health checks.
@@ -140,6 +140,7 @@ import conversationsRoutes from './api/routes/conversations.routes.js';
 import alertsRoutes from './api/routes/alerts.routes.js';
 import telemetryRoutes from './api/routes/telemetry.routes.js';
 import promptBuilderRoutes from './api/routes/prompt-builder.routes.js';
+import onboardingRoutes from './api/routes/onboarding.routes.js';
 import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
@@ -170,12 +171,15 @@ app.use('/api/telemetry', telemetryRoutes);
 // Prompt builder routes (templates public, builder/versions behind auth)
 app.use('/api', promptBuilderRoutes);
 
+// Onboarding routes (all behind auth)
+app.use('/api', onboardingRoutes);
+
 // Placeholder root route
 app.get('/', (_req: Request, res: Response) => {
   res.json({
-    name: 'Ask ROIE Bot',
+    name: 'ConversAI',
     version: '1.0.0',
-    description: 'WhatsApp & Telegram AI Sales Agent',
+    description: 'Multi-tenant WhatsApp & Telegram AI Sales Agent',
     endpoints: {
       health: '/health',
       webhooks: {

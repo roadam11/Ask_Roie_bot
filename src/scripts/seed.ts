@@ -2,7 +2,7 @@
  * Database Seed Script
  *
  * Inserts realistic demo data for the admin dashboard:
- *   - 1 admin user (credentials: admin@askroie.com / Admin1234!)
+ *   - 1 admin user (credentials: admin@conversai.com / Admin1234!)
  *   - 10 leads (Hebrew names, varied statuses)
  *   - 10 conversations
  *   - 30 messages (3 per conversation)
@@ -126,7 +126,7 @@ async function seedAdminUser(): Promise<void> {
      VALUES (
        '00000000-0000-0000-0000-000000000010',
        $1,
-       'admin@askroie.com',
+       'admin@conversai.com',
        $2,
        'Admin',
        'admin',
@@ -138,7 +138,7 @@ async function seedAdminUser(): Promise<void> {
     [DEFAULT_ACCOUNT_ID, passwordHash],
   );
 
-  logger.info('Admin user ready: admin@askroie.com / Admin1234!');
+  logger.info('Admin user ready: admin@conversai.com / Admin1234!');
 }
 
 async function seedLeads(): Promise<string[]> {
@@ -313,16 +313,16 @@ async function seedSettings(): Promise<void> {
       DEFAULT_ACCOUNT_ID,
       JSON.stringify({
         id:          DEFAULT_ACCOUNT_ID,
-        companyName: 'Ask ROIE',
-        ownerName:   'ROIE',
-        email:       'admin@askroie.com',
+        companyName: 'Demo Business',
+        ownerName:   'Demo Owner',
+        email:       'admin@conversai.com',
         phone:       '+972-50-000-0000',
         timezone:    'Asia/Jerusalem',
       }),
       JSON.stringify({
         tone:         'friendly',
         strictness:   65,
-        systemPrompt: 'אתה סוכן מכירות AI של Ask ROIE, שירות שיעורים פרטיים מוביל. תפקידך לסייע להורים ולתלמידים למצוא את המורה המתאים ולקבוע שיעור ניסיון.',
+        systemPrompt: 'אתה סוכן מכירות AI לשירות שיעורים פרטיים. תפקידך לסייע להורים ולתלמידים למצוא את המורה המתאים ולקבוע שיעור ניסיון.',
       }),
     ],
   );
@@ -346,7 +346,7 @@ async function main(): Promise<void> {
     await seedSettings();
 
     logger.info('✓ Seed complete!');
-    logger.info('Login: admin@askroie.com / Admin1234!');
+    logger.info('Login: admin@conversai.com / Admin1234!');
   } catch (err) {
     logger.error('Seed failed', { error: (err as Error).message });
     throw err;

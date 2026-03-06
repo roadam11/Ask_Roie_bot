@@ -41,9 +41,27 @@ export interface AccountBehavior {
   language?: string;
 }
 
+export interface BrandSettings {
+  brandName?: string;        // Dashboard display name
+  businessName?: string;     // Bot conversation name
+  supportEmail?: string;     // Contact email
+  logoUrl?: string;          // Future: custom logo
+}
+
+export interface OnboardingStatus {
+  step: 'created' | 'template_chosen' | 'wizard_completed' | 'whatsapp_connected' | 'bot_tested' | 'live';
+  templateId?: string;
+  wizardCompletedAt?: string;
+  whatsappConnectedAt?: string;
+  firstTestAt?: string;
+  wentLiveAt?: string;
+}
+
 export interface AccountSettings {
   profile: AccountProfile | null;
   behavior: AccountBehavior | null;
+  brand?: BrandSettings | null;
+  onboardingStatus?: OnboardingStatus | null;
 }
 
 // ============================================================================
@@ -58,8 +76,8 @@ export interface AccountSettings {
  * Returns null if no settings row exists or if the lead has no agent.
  */
 export async function loadSettingsForLead(leadId: string): Promise<AccountSettings | null> {
-  const row = await queryOne<{ profile: unknown; behavior: unknown }>(
-    `SELECT s.profile, s.behavior
+  const row = await queryOne<{ profile: unknown; behavior: unknown; brand: unknown; onboarding_status: unknown }>(
+    `SELECT s.profile, s.behavior, s.brand, s.onboarding_status
      FROM settings s
      JOIN agents a ON a.account_id = s.account_id
      JOIN leads l ON l.agent_id = a.id AND l.deleted_at IS NULL
@@ -81,5 +99,13 @@ export async function loadSettingsForLead(leadId: string): Promise<AccountSettin
     ? row.behavior as AccountBehavior
     : null;
 
-  return { profile, behavior };
+  const brand = (row.brand && typeof row.brand === 'object')
+    ? row.brand as BrandSettings
+    : null;
+
+  const onboardingStatus = (row.onboarding_status && typeof row.onboarding_status === 'object')
+    ? row.onboarding_status as OnboardingStatus
+    : null;
+
+  return { profile, behavior, brand, onboardingStatus };
 }

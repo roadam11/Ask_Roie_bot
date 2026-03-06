@@ -35,10 +35,10 @@ const mockQueryOne = queryOne as jest.Mock;
 function makeSettings(overrides: Partial<AccountSettings> = {}): AccountSettings {
   return {
     profile: {
-      companyName: 'Ask ROIE',
-      ownerName: 'Roie Adam',
+      companyName: 'Demo Business',
+      ownerName: 'Demo Owner',
       phone: '+972501234567',
-      email: 'roie@askroie.com',
+      email: 'demo@conversai.com',
       subjects: ['math', 'physics'],
       pricing: '150₪/hr',
     },
@@ -108,36 +108,36 @@ describe('buildPromptWithContext()', () => {
   describe('base prompt selection', () => {
     it('should use hardcoded SYSTEM_PROMPT when settings is undefined', () => {
       const result = buildPromptWithContext([], null, undefined);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use hardcoded SYSTEM_PROMPT when settings is null', () => {
       const result = buildPromptWithContext([], null, null);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use hardcoded SYSTEM_PROMPT when behavior is null', () => {
       const settings = makeSettings({ behavior: null });
       const result = buildPromptWithContext([], null, settings);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use hardcoded SYSTEM_PROMPT when behavior.systemPrompt is undefined', () => {
       const settings = makeSettings({ behavior: { systemPrompt: undefined } });
       const result = buildPromptWithContext([], null, settings);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use hardcoded SYSTEM_PROMPT when behavior.systemPrompt is empty string', () => {
       const settings = makeSettings({ behavior: { systemPrompt: '' } });
       const result = buildPromptWithContext([], null, settings);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use hardcoded SYSTEM_PROMPT when behavior.systemPrompt is whitespace-only', () => {
       const settings = makeSettings({ behavior: { systemPrompt: '   ' } });
       const result = buildPromptWithContext([], null, settings);
-      expect(result).toContain('Ask ROIE Bot');
+      expect(result).toContain('private tutoring service');
     });
 
     it('should use custom prompt when behavior.systemPrompt is a non-empty string', () => {
@@ -146,7 +146,7 @@ describe('buildPromptWithContext()', () => {
       });
       const result = buildPromptWithContext([], null, settings);
       expect(result).toContain('My custom prompt here.');
-      expect(result).not.toContain('Ask ROIE Bot');
+      expect(result).not.toContain('private tutoring service');
     });
   });
 
@@ -192,7 +192,7 @@ describe('buildPromptWithContext()', () => {
       const settings = makeSettings();
       const result = buildPromptWithContext([], null, settings);
       expect(result).toContain('<TUTOR_PROFILE>');
-      expect(result).toContain('Roie Adam');
+      expect(result).toContain('Demo Owner');
       expect(result).toContain('</TUTOR_PROFILE>');
     });
 

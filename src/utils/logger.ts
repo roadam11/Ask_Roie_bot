@@ -134,7 +134,7 @@ const logger = winston.createLogger({
   level: config.logging.level,
   levels: winston.config.npm.levels,
   defaultMeta: {
-    service: 'ask-roie-bot',
+    service: 'conversai',
   },
   transports: [
     consoleTransport,
