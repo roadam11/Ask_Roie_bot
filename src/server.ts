@@ -139,6 +139,7 @@ import analyticsRoutes from './api/routes/analytics.routes.js';
 import conversationsRoutes from './api/routes/conversations.routes.js';
 import alertsRoutes from './api/routes/alerts.routes.js';
 import telemetryRoutes from './api/routes/telemetry.routes.js';
+import promptBuilderRoutes from './api/routes/prompt-builder.routes.js';
 import { adminAuth } from './api/middleware/auth.js';
 
 // WhatsApp webhook routes
@@ -165,6 +166,9 @@ app.use('/api', analyticsRoutes);
 app.use('/api', conversationsRoutes);
 app.use('/api', alertsRoutes);
 app.use('/api/telemetry', telemetryRoutes);
+
+// Prompt builder routes (templates public, builder/versions behind auth)
+app.use('/api', promptBuilderRoutes);
 
 // Placeholder root route
 app.get('/', (_req: Request, res: Response) => {

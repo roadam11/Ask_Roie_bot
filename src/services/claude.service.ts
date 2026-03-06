@@ -23,6 +23,7 @@ import type { AccountSettings } from './settings.service.js';
 import { validateAIResponse, ensureCTA } from '../utils/response-validator.js';
 import { selectModel } from '../utils/model-router.js';
 import type { RoutingDecision } from '../utils/model-router.js';
+import { getActiveVersionForLead } from './prompt-version.service.js';
 
 // ============================================================================
 // History Sanitization — strip polluted credential claims from old bot messages
@@ -838,6 +839,17 @@ export async function sendMessageWithToolLoop(
   // Load account settings for prompt personalization
   const settings = await safeLoadSettings(lead.id);
 
+  // Load active wizard-generated prompt version (if any)
+  let generatedPrompt: string | null = null;
+  try {
+    const activeVersion = await getActiveVersionForLead(lead.id);
+    if (activeVersion?.system_prompt) {
+      generatedPrompt = activeVersion.system_prompt;
+    }
+  } catch {
+    // Non-critical — fallback to default prompt assembly
+  }
+
   // --- Hybrid routing: select model based on message complexity ---
   const lastUserMsg = conversationHistory
     .filter(m => m.role === 'user')
@@ -854,7 +866,7 @@ export async function sendMessageWithToolLoop(
     : 6;
   const maxTokens = isHaiku ? 280 : config.anthropic.maxTokens;
 
-  const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings);
+  const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings, generatedPrompt);
 
   // Trim conversation history based on model
   const trimmedHistory = conversationHistory.slice(-historyLimit);

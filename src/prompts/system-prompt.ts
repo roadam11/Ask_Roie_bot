@@ -851,15 +851,27 @@ function selectPromptBlocks(userMessage: string): string {
  * @param conversationHistory - Array of previous messages in the conversation
  * @param leadState - Current state of the lead from the database
  * @param settings - Optional account settings for prompt personalization
+ * @param generatedPrompt - Optional wizard-generated prompt (replaces GENERIC_SALES_PROMPT + TUTOR_PROFILE)
  * @returns Complete system prompt with context inserted
  */
 export function buildPromptWithContext(
   conversationHistory: ConversationMessage[],
   leadState: Partial<Lead> | null,
-  settings?: AccountSettings | null
+  settings?: AccountSettings | null,
+  generatedPrompt?: string | null,
 ): string {
   const formattedLeadState = formatLeadState(leadState);
   const formattedHistory = formatConversationHistory(conversationHistory);
+
+  // ── If wizard-generated prompt exists, use it (it already contains constraints + profile) ──
+  if (generatedPrompt) {
+    const resolved = generatedPrompt
+      .replace('{{LEAD_STATE}}', formattedLeadState)
+      .replace('{{CONVERSATION_HISTORY}}', formattedHistory);
+    return resolved;
+  }
+
+  // ── Fallback: existing prompt assembly ──
 
   // ── Part A: Hard Constraints (non-overridable, always first) ──
   const parts: string[] = [HARD_CONSTRAINTS];
