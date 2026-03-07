@@ -379,15 +379,29 @@ export async function takeoverConversation(req: AuthenticatedRequest, res: Respo
 /**
  * POST /api/conversations/:id/resume
  * Resume AI on conversation after takeover.
+ * Generates a context summary of the human+user conversation for the AI.
  */
 export async function resumeAI(req: AuthenticatedRequest, res: Response) {
   const { id } = req.params;
   const accountId = req.user?.accountId;
 
+  // Fetch conversation data BEFORE clearing takeover fields
+  const conv = await queryOne<{ lead_id: string; taken_over_at: string | null }>(
+    'SELECT lead_id, taken_over_at FROM conversations WHERE id = $1',
+    [id],
+  );
+
   await query(
     'UPDATE conversations SET ai_active = true, taken_over_by = NULL, taken_over_at = NULL WHERE id = $1',
     [id],
   );
+
+  // Generate post-takeover summary (non-blocking — resume works even if summary fails)
+  if (conv?.taken_over_at) {
+    generateTakeoverSummary(id, conv.lead_id, conv.taken_over_at).catch((err) => {
+      logger.error(`[TAKEOVER] conversation_id=${id} summary_failed error=${err.message}`);
+    });
+  }
 
   // Broadcast
   try {
@@ -400,6 +414,69 @@ export async function resumeAI(req: AuthenticatedRequest, res: Response) {
 
   logger.info(`[TAKEOVER] conversation_id=${id} action=resume`);
   return res.json({ success: true, ai_active: true });
+}
+
+/**
+ * Generate a short Hebrew summary of messages exchanged during human takeover.
+ * Uses Haiku for speed/cost. Saved as a system message so AI has context.
+ */
+async function generateTakeoverSummary(
+  conversationId: string,
+  leadId: string,
+  takenOverAt: string,
+): Promise<void> {
+  const Anthropic = (await import('@anthropic-ai/sdk')).default;
+  const config = (await import('../../config/index.js')).default;
+
+  // Fetch BOTH admin AND user messages during takeover (limit 20)
+  const takeoverMessages = await query<{ sender: string; content: string }>(
+    `SELECT sender, content FROM messages
+     WHERE conversation_id = $1 AND created_at > $2
+     ORDER BY created_at ASC
+     LIMIT 20`,
+    [conversationId, takenOverAt],
+  );
+
+  if (!takeoverMessages.rows.length) return;
+
+  let messageTexts = takeoverMessages.rows
+    .map((m) => `[${m.sender}]: ${m.content}`)
+    .join('\n');
+
+  // Truncate to prevent expensive API call
+  if (messageTexts.length > 2000) {
+    messageTexts = messageTexts.slice(-2000);
+  }
+
+  const client = new Anthropic({
+    apiKey: config.anthropic.apiKey,
+    timeout: 10_000,
+  });
+
+  const summary = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 200,
+    messages: [{
+      role: 'user',
+      content: `סכם בקצרה את השיחה הבאה בין נציג אנושי ללקוח. כתוב 1-2 משפטים בלבד בעברית. מה סוכם? מה הובטח? מה הצעד הבא?\nחשוב מאוד: החזר אך ורק את טקסט הסיכום, ללא מילות הקדמה, ללא "הנה הסיכום", ללא סיום.\n\nשיחה:\n${messageTexts}`,
+    }],
+  });
+
+  const summaryText = summary.content[0]?.type === 'text' ? summary.content[0].text : '';
+
+  if (summaryText.trim()) {
+    await MessageService.createBotMessage(
+      leadId,
+      `[סיכום התערבות נציג] ${summaryText}`,
+      summary.usage?.output_tokens || 0,
+      'claude-haiku-4-5-20251001',
+      undefined,
+      undefined,
+      conversationId,
+    );
+  }
+
+  logger.info(`[TAKEOVER] conversation_id=${conversationId} action=resume summary_generated=true summary_tokens=${summary.usage?.output_tokens || 0}`);
 }
 
 /**

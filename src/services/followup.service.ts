@@ -6,16 +6,18 @@
 import type { Lead, FollowUp, FollowUpType } from '../types/index.js';
 
 // Follow-up timing constants (in hours)
-const FOLLOWUP_COOLDOWN_HOURS = 24;
+// 23h cooldown — sends BEFORE Meta's 24h free messaging window closes.
+// After 24h, WhatsApp requires pre-approved template messages.
+const FOLLOWUP_COOLDOWN_HOURS = 23;
 const FOLLOWUP_INTERVALS: Record<FollowUpType, number> = {
-  // Legacy types
-  '24h': 24,
+  // Legacy types — 23h to stay within Meta's 24h window
+  '24h': 23,
   '72h': 72,
   '7d': 168,
   // Automation types (in hours)
-  'thinking_24h': 24,
+  'thinking_24h': 23,
   'trial_reminder_2h': 2,
-  'trial_followup_24h': 24,
+  'trial_followup_24h': 23,
   'idle_48h': 48,
 };
 

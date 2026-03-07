@@ -171,9 +171,11 @@ export function hasHigherPriority(
  * Follow-up delay configurations in milliseconds
  */
 export const FOLLOW_UP_DELAYS: Record<AutomationFollowUpType, number> = {
-  thinking_24h: 24 * 60 * 60 * 1000,      // 24 hours
+  // 23h — sends BEFORE Meta's 24h free messaging window closes.
+  // After 24h, WhatsApp requires pre-approved template messages.
+  thinking_24h: 23 * 60 * 60 * 1000,      // 23 hours
   trial_reminder_2h: 2 * 60 * 60 * 1000,  // 2 hours (before trial)
-  trial_followup_24h: 24 * 60 * 60 * 1000, // 24 hours (after trial)
+  trial_followup_24h: 23 * 60 * 60 * 1000, // 23 hours (after trial)
   idle_48h: 48 * 60 * 60 * 1000,           // 48 hours
 };
 

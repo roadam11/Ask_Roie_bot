@@ -433,7 +433,8 @@ export function shouldSendFollowUp(lead: Lead): {
   }
 
   // Determine follow-up type based on time elapsed
-  if (hoursSinceLastUserMessage >= 24 && hoursSinceLastUserMessage < 72) {
+  // 23h — sends BEFORE Meta's 24h free messaging window closes
+  if (hoursSinceLastUserMessage >= 23 && hoursSinceLastUserMessage < 72) {
     return { should: true, type: '24h' };
   }
 

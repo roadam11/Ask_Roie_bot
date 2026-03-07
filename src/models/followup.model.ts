@@ -29,9 +29,10 @@ import type { FollowUp, FollowUpType, FollowUpStatus } from '../types/index.js';
 // ============================================================================
 
 /**
- * Minimum hours between follow-ups to the same lead
+ * Minimum hours between follow-ups to the same lead.
+ * 23h — sends BEFORE Meta's 24h free messaging window closes.
  */
-const FOLLOWUP_COOLDOWN_HOURS = 24;
+const FOLLOWUP_COOLDOWN_HOURS = 23;
 
 // ============================================================================
 // Types
