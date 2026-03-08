@@ -20,7 +20,7 @@ import type { Lead } from '../types/index.js';
 import type { RawTelemetryPayload } from './telemetry.service.js';
 import { loadSettingsForLead } from './settings.service.js';
 import type { AccountSettings } from './settings.service.js';
-import { validateAIResponse, ensureCTA } from '../utils/response-validator.js';
+import { validateAIResponse } from '../utils/response-validator.js';
 import { selectModel } from '../utils/model-router.js';
 import type { RoutingDecision } from '../utils/model-router.js';
 import { getActiveVersionForLead } from './prompt-version.service.js';
@@ -862,8 +862,8 @@ export async function sendMessageWithToolLoop(
   // Adaptive history: if numbers appeared in history, Haiku needs more context
   const historyHasNumbers = conversationHistory.some(h => /\d{2,}/.test(h.content || ''));
   const historyLimit = isHaiku
-    ? (historyHasNumbers ? 4 : 2)
-    : 6;
+    ? (historyHasNumbers ? 8 : 8)
+    : 12;
   const maxTokens = isHaiku ? 280 : config.anthropic.maxTokens;
 
   const systemPrompt = buildPromptWithContext(conversationHistory, lead, settings, generatedPrompt);
@@ -1063,9 +1063,13 @@ export async function sendMessageWithToolLoop(
         }
       }
 
-      // ── Post-AI Guard 2: CTA append ──
-      const ctaResult = ensureCTA(finalContent);
-      finalContent = ctaResult.text;
+      // ── Post-AI Guard 2: CTA append — DISABLED (5.5d) ──
+      // CTA is now handled by CTA_RULE in HARD_CONSTRAINTS.
+      // ensureCTA() was force-appending "אשמח לתאם שיעור ניסיון" to every message,
+      // overriding the AI's contextual judgment.
+      // const ctaResult = ensureCTA(finalContent);
+      // finalContent = ctaResult.text;
+      const ctaResult = { appended: false };
 
       // ── Router cost log ──
       logger.info(
@@ -1201,9 +1205,7 @@ export async function sendMessageWithToolLoop(
     finalContent = 'שלום! איך אפשר לעזור לך היום? 🙂';
   }
 
-  // Apply CTA guard even on fallback path
-  const ctaResult = ensureCTA(finalContent);
-  finalContent = ctaResult.text;
+  // CTA guard disabled (5.5d) — handled by CTA_RULE in HARD_CONSTRAINTS
 
   const latencyMs = Date.now() - startTime;
 
