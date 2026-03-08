@@ -900,7 +900,7 @@ export function buildPromptWithContext(
     const resolved = generatedPrompt
       .replace('{{LEAD_STATE}}', formattedLeadState)
       .replace('{{CONVERSATION_HISTORY}}', formattedHistory);
-    return resolved;
+    return HARD_CONSTRAINTS + '\n\n' + resolved;
   }
 
   // ── Fallback: existing prompt assembly ──
