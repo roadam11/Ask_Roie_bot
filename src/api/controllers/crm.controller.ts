@@ -39,6 +39,33 @@ function isValidUUID(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }
 
+/** Calculate lead score: hot/warm/cold based on engagement + recency + state */
+function calculateLeadScore(row: Record<string, unknown>): 'hot' | 'warm' | 'cold' {
+  let score = 0;
+
+  const msgCount = Number(row.message_count ?? 0);
+  if (msgCount > 6) score += 3;
+  else if (msgCount > 2) score += 1;
+
+  const lastMsgAt = row.last_message_at as string | null;
+  const hoursSince = lastMsgAt
+    ? (Date.now() - new Date(lastMsgAt).getTime()) / 3600000
+    : 999;
+  if (hoursSince < 2) score += 3;
+  else if (hoursSince < 24) score += 1;
+
+  const state = row.lead_state as string;
+  if (state === 'ready_to_book' || state === 'booking_intent') score += 4;
+  else if (state === 'considering' || state === 'thinking') score += 2;
+  else if (state === 'qualified' || state === 'engaged') score += 1;
+
+  if (row.booking_completed === true || row.status === 'booked') score += 5;
+
+  if (score >= 5) return 'hot';
+  if (score >= 2) return 'warm';
+  return 'cold';
+}
+
 /** Map DB lead row → LeadDTO */
 function toLeadDTO(row: Record<string, unknown>) {
   return {
@@ -53,6 +80,7 @@ function toLeadDTO(row: Record<string, unknown>) {
     is_demo:    row.is_demo === true,
     created_at: row.created_at,
     agent_id:   row.agent_id ?? '00000000-0000-0000-0000-000000000001',
+    lead_score: calculateLeadScore(row),
   };
 }
 
@@ -143,10 +171,12 @@ export async function getLeads(req: AuthenticatedRequest, res: Response): Promis
     ),
     query<Record<string, unknown>>(
       `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status,
-              l.lead_state, l.lead_value, l.is_demo, l.created_at,
-              COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id
+              l.lead_state, l.lead_value, l.is_demo, l.created_at, l.booking_completed,
+              COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id,
+              c.message_count, c.last_message_at
        FROM leads l
        LEFT JOIN agents a ON l.agent_id = a.id
+       LEFT JOIN conversations c ON c.lead_id = l.id
        WHERE ${where}
        ORDER BY l.created_at DESC
        LIMIT $${pi} OFFSET $${pi + 1}`,
@@ -198,10 +228,12 @@ export async function getLeadsCursor(req: AuthenticatedRequest, res: Response): 
 
   const rowsRes = await query<Record<string, unknown>>(
     `SELECT l.id, l.phone, l.name, l.subjects, l.level, l.status,
-            l.lead_state, l.lead_value, l.created_at,
-            COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id
+            l.lead_state, l.lead_value, l.created_at, l.booking_completed,
+            COALESCE(l.agent_id, '00000000-0000-0000-0000-000000000001') as agent_id,
+            c.message_count, c.last_message_at
      FROM leads l
      LEFT JOIN agents a ON l.agent_id = a.id
+     LEFT JOIN conversations c ON c.lead_id = l.id
      WHERE ${where}
      ORDER BY l.created_at DESC, l.id DESC
      LIMIT $${pi}`,
@@ -801,11 +833,13 @@ export async function getOverview(req: AuthenticatedRequest, res: Response): Pro
  * Query params: ?period=7d|30d|90d (default 7d)
  */
 export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const startTime = Date.now();
   const aid = accountId(req);
 
   const periodParam = (req.query.period as string) ?? '7d';
   const periodDays = periodParam === '90d' ? 90 : periodParam === '30d' ? 30 : 7;
   const interval = `${periodDays} days`;
+  const since = new Date(Date.now() - periodDays * 86400000);
 
   const [
     statsRes,
@@ -814,6 +848,9 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     activityRes,
     intentRes,
     channelRes,
+    valueRes,
+    dailyLeadsRes,
+    dailyBookingsRes,
   ] = await Promise.all([
     // 1. Stats: total leads, active conversations, messages in period, AI responses in period
     queryOne<{
@@ -919,6 +956,66 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
        GROUP BY c.channel`,
       [aid],
     ),
+
+    // 7. Value metrics: bookings, AI messages, takeovers in period
+    queryOne<{
+      bookings: string;
+      ai_messages: string;
+      human_messages: string;
+      total_tokens: string;
+      takeover_count: string;
+      new_leads: string;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM leads l LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.status = 'booked'
+            AND l.booked_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS bookings,
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE m.role = 'bot' AND m.created_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS ai_messages,
+         (SELECT COUNT(*) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE m.role = 'user' AND m.created_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS human_messages,
+         (SELECT COALESCE(SUM(m.tokens_used), 0) FROM messages m JOIN leads l ON m.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE m.role = 'bot' AND m.created_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS total_tokens,
+         (SELECT COUNT(*) FROM conversations c JOIN leads l ON c.lead_id = l.id AND l.deleted_at IS NULL ${EXCLUDE_DEMO}
+          LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE c.taken_over_at IS NOT NULL AND c.taken_over_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS takeover_count,
+         (SELECT COUNT(*) FROM leads l LEFT JOIN agents a ON l.agent_id = a.id
+          WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.created_at > $2
+            AND ($1::uuid IS NULL OR a.account_id = $1)) AS new_leads`,
+      [aid, since],
+    ),
+
+    // 8. Daily leads
+    query<{ date: string; count: string }>(
+      `SELECT DATE(l.created_at AT TIME ZONE 'Asia/Jerusalem')::text AS date, COUNT(*) AS count
+       FROM leads l
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.created_at > $2
+         AND ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY DATE(l.created_at AT TIME ZONE 'Asia/Jerusalem')
+       ORDER BY date`,
+      [aid, since],
+    ),
+
+    // 9. Daily bookings
+    query<{ date: string; count: string }>(
+      `SELECT DATE(l.booked_at AT TIME ZONE 'Asia/Jerusalem')::text AS date, COUNT(*) AS count
+       FROM leads l
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO} AND l.status = 'booked' AND l.booked_at > $2
+         AND ($1::uuid IS NULL OR a.account_id = $1)
+       GROUP BY DATE(l.booked_at AT TIME ZONE 'Asia/Jerusalem')
+       ORDER BY date`,
+      [aid, since],
+    ),
   ]);
 
   // Build stats
@@ -970,6 +1067,45 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     count:   parseInt(r.count, 10),
   }));
 
+  // Build value metrics
+  const aiMessages     = parseInt(valueRes?.ai_messages ?? '0', 10);
+  const humanMessages  = parseInt(valueRes?.human_messages ?? '0', 10);
+  const totalBookings  = parseInt(valueRes?.bookings ?? '0', 10);
+  const totalTokens    = parseInt(valueRes?.total_tokens ?? '0', 10);
+  const takeoverCount  = parseInt(valueRes?.takeover_count ?? '0', 10);
+  const newLeads       = parseInt(valueRes?.new_leads ?? '0', 10);
+  const totalMessages  = aiMessages + humanMessages;
+
+  // Estimate hours saved: each AI message saves ~2 minutes of human time
+  const estimatedHoursSaved = Math.round((aiMessages * 2) / 60 * 10) / 10;
+  // Default hourly rate: ₪150 (average Israeli tutor rate)
+  const hourlyRate = 150;
+  const estimatedMoneySaved = Math.round(estimatedHoursSaved * hourlyRate);
+
+  // AI cost estimate (approximate Claude pricing)
+  const estimatedAiCost = parseFloat((totalTokens * 0.000008).toFixed(2));
+
+  const conversionRate = newLeads > 0 ? Math.round((totalBookings / newLeads) * 1000) / 10 : 0;
+  const takeoverRate   = totalMessages > 0 ? Math.round((takeoverCount / totalMessages) * 1000) / 10 : 0;
+
+  // Zero-fill daily leads & bookings
+  const fillZeroDays = (data: Array<{ date: string; count: string }>) => {
+    const map = new Map(data.map(d => [d.date, parseInt(d.count, 10)]));
+    const result: Array<{ date: string; count: number }> = [];
+    for (let i = periodDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      result.push({ date: key, count: map.get(key) ?? 0 });
+    }
+    return result;
+  };
+
+  const dailyLeads    = fillZeroDays(dailyLeadsRes.rows);
+  const dailyBookings = fillZeroDays(dailyBookingsRes.rows);
+
+  logger.info(`[ANALYTICS] account_id=${aid} period=${periodParam} query_time_ms=${Date.now() - startTime}`);
+
   res.json({
     period: periodParam,
     stats,
@@ -978,6 +1114,21 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     messagesPerDay,
     intentDistribution,
     channelDistribution,
+    // New value metrics
+    totalBookings,
+    newLeadsThisPeriod: newLeads,
+    conversionRate,
+    totalMessages,
+    aiMessages,
+    humanMessages,
+    totalTokensUsed: totalTokens,
+    estimatedAiCost,
+    estimatedHoursSaved,
+    estimatedMoneySaved,
+    takeoverCount,
+    takeoverRate,
+    dailyLeads,
+    dailyBookings,
   });
 }
 
