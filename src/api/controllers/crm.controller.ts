@@ -851,6 +851,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     valueRes,
     dailyLeadsRes,
     dailyBookingsRes,
+    convFunnelRes,
   ] = await Promise.all([
     // 1. Stats: total leads, active conversations, messages in period, AI responses in period
     queryOne<{
@@ -1016,6 +1017,29 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
        ORDER BY date`,
       [aid, since],
     ),
+
+    // 10. Conversion funnel (progressive stages)
+    queryOne<{
+      total: string;
+      engaged: string;
+      qualified: string;
+      booking_intent: string;
+      booked: string;
+    }>(
+      `SELECT
+         COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE l.lead_state != 'new'
+           OR EXISTS (SELECT 1 FROM conversations c WHERE c.lead_id = l.id AND c.message_count > 0)) AS engaged,
+         COUNT(*) FILTER (WHERE l.status IN ('qualified','considering','hesitant','ready_to_book','booked')) AS qualified,
+         COUNT(*) FILTER (WHERE l.status IN ('ready_to_book','booked') OR l.booking_completed = true) AS booking_intent,
+         COUNT(*) FILTER (WHERE l.booking_completed = true OR l.status = 'booked') AS booked
+       FROM leads l
+       LEFT JOIN agents a ON l.agent_id = a.id
+       WHERE l.deleted_at IS NULL ${EXCLUDE_DEMO}
+         AND ($1::uuid IS NULL OR a.account_id = $1)
+         AND l.created_at > $2`,
+      [aid, since],
+    ),
   ]);
 
   // Build stats
@@ -1104,6 +1128,29 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
   const dailyLeads    = fillZeroDays(dailyLeadsRes.rows);
   const dailyBookings = fillZeroDays(dailyBookingsRes.rows);
 
+  // Build conversion funnel
+  const cfTotal   = parseInt(convFunnelRes?.total ?? '0', 10);
+  const cfEngaged = parseInt(convFunnelRes?.engaged ?? '0', 10);
+  const cfQual    = parseInt(convFunnelRes?.qualified ?? '0', 10);
+  const cfIntent  = parseInt(convFunnelRes?.booking_intent ?? '0', 10);
+  const cfBooked  = parseInt(convFunnelRes?.booked ?? '0', 10);
+
+  function safeDrop(prev: number, cur: number): number {
+    if (!prev || prev === 0 || cur > prev) return 0;
+    return Math.round(((prev - cur) / prev) * 100);
+  }
+  function pct(n: number, total: number): number {
+    return total > 0 ? Math.round((n / total) * 100) : 0;
+  }
+
+  const conversionFunnel = [
+    { stage: 'total',          label: 'כל הפניות',      count: cfTotal,   percentage: 100,                    dropOff: 0 },
+    { stage: 'engaged',        label: 'נכנסו לשיחה',    count: cfEngaged, percentage: pct(cfEngaged, cfTotal), dropOff: safeDrop(cfTotal, cfEngaged) },
+    { stage: 'qualified',      label: 'עברו סינון',     count: cfQual,    percentage: pct(cfQual, cfTotal),    dropOff: safeDrop(cfEngaged, cfQual) },
+    { stage: 'booking_intent', label: 'ביקשו לקבוע',    count: cfIntent,  percentage: pct(cfIntent, cfTotal),  dropOff: safeDrop(cfQual, cfIntent) },
+    { stage: 'booked',         label: 'קבעו שיעור',     count: cfBooked,  percentage: pct(cfBooked, cfTotal),  dropOff: safeDrop(cfIntent, cfBooked) },
+  ];
+
   logger.info(`[ANALYTICS] account_id=${aid} period=${periodParam} query_time_ms=${Date.now() - startTime}`);
 
   res.json({
@@ -1129,6 +1176,7 @@ export async function getAnalyticsDashboard(req: AuthenticatedRequest, res: Resp
     takeoverRate,
     dailyLeads,
     dailyBookings,
+    conversionFunnel,
   });
 }
 
