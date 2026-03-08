@@ -192,6 +192,13 @@ export interface Lead {
   human_contacted_at?: Date;
 
   // ============================================================================
+  // Lead Profile (structured data extracted from conversation)
+  // ============================================================================
+
+  /** Structured profile data extracted from conversation history */
+  lead_profile?: Record<string, unknown>;
+
+  // ============================================================================
   // Message Tracking Fields
   // ============================================================================
 

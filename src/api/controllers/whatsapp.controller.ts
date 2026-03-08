@@ -23,6 +23,7 @@ import {
   onUserResponse,
   onLeadStateChange,
 } from '../../services/follow-up-decision.service.js';
+import { extractLeadProfile, loadLeadProfile, saveLeadProfile } from '../../services/lead-profile.service.js';
 import type { Lead, UpdateLeadInput, LeadState } from '../../types/index.js';
 import { query, queryOne } from '../../database/connection.js';
 import { getWebSocketServer } from '../../realtime/ws-server.js';
@@ -436,6 +437,17 @@ async function processMessage(
       );
 
       logger.info('[WA_SAVE] Bot message saved', { trace, leadId: lead.id, messageId: botMessage.id });
+
+      // ── Lead Profile Extraction (Sprint 5.6) ──
+      try {
+        const existingProfile = await loadLeadProfile(lead.id);
+        const updatedProfile = extractLeadProfile(conversationHistory, existingProfile);
+        if (Object.keys(updatedProfile).length > 0) {
+          await saveLeadProfile(lead.id, updatedProfile);
+        }
+      } catch (profileErr) {
+        logger.warn('[PROFILE_ERR] extraction_failed', { trace, error: (profileErr as Error).message });
+      }
 
       // Update conversation denormalized fields
       if (conversationId) {
