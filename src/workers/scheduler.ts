@@ -19,6 +19,7 @@ import {
   findIdleLeads,
   scheduleFollowUpForLead,
 } from '../services/follow-up-decision.service.js';
+import { sweepProactiveFollowUps } from '../services/proactive-followup.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================================================
@@ -46,6 +47,12 @@ const CALENDLY_CRON = '2-57/5 * * * *';
  * Detects leads that have been idle for 48-72 hours
  */
 const IDLE_DETECTION_CRON = '7,22,37,52 * * * *';
+
+/**
+ * Proactive AI follow-up schedule (every 30 minutes, offset by 10 minutes)
+ * Finds leads silent for 23-24h and sends AI-generated contextual follow-ups
+ */
+const PROACTIVE_FOLLOWUP_CRON = '10,40 * * * *';
 
 // ============================================================================
 // Follow-Up Scheduler Logic
@@ -256,6 +263,7 @@ async function runIdleDetectionNow(): Promise<void> {
 let followUpSchedulerJob: schedule.Job | null = null;
 let calendlySchedulerJob: schedule.Job | null = null;
 let idleDetectionJob: schedule.Job | null = null;
+let proactiveFollowUpJob: schedule.Job | null = null;
 
 /**
  * Start all schedulers
@@ -265,6 +273,7 @@ function startScheduler(): void {
     followUpSchedule: SCHEDULE_CRON,
     calendlySchedule: CALENDLY_CRON,
     idleDetectionSchedule: IDLE_DETECTION_CRON,
+    proactiveFollowUpSchedule: PROACTIVE_FOLLOWUP_CRON,
     maxFollowUpsPerRun: MAX_FOLLOWUPS_PER_RUN,
   });
 
@@ -289,6 +298,12 @@ function startScheduler(): void {
     await detectIdleLeads();
   });
 
+  // Schedule proactive AI follow-ups (every 30 minutes)
+  proactiveFollowUpJob = schedule.scheduleJob(PROACTIVE_FOLLOWUP_CRON, async () => {
+    logger.debug('Proactive follow-up sweep triggered by cron');
+    await sweepProactiveFollowUps();
+  });
+
   // Run all immediately on startup
   scheduleDueFollowUps().catch((error) => {
     logger.error('Initial follow-up scheduler run failed', { error });
@@ -302,10 +317,15 @@ function startScheduler(): void {
     logger.error('Initial idle detection failed', { error });
   });
 
+  sweepProactiveFollowUps().catch((error) => {
+    logger.error('Initial proactive follow-up sweep failed', { error });
+  });
+
   logger.info('All schedulers started', {
     followUpNextRun: followUpSchedulerJob.nextInvocation()?.toISOString(),
     calendlyNextRun: calendlySchedulerJob.nextInvocation()?.toISOString(),
     idleDetectionNextRun: idleDetectionJob.nextInvocation()?.toISOString(),
+    proactiveFollowUpNextRun: proactiveFollowUpJob.nextInvocation()?.toISOString(),
   });
 }
 
@@ -329,6 +349,12 @@ function stopScheduler(): void {
     idleDetectionJob.cancel();
     idleDetectionJob = null;
     logger.info('Idle detection scheduler stopped');
+  }
+
+  if (proactiveFollowUpJob) {
+    proactiveFollowUpJob.cancel();
+    proactiveFollowUpJob = null;
+    logger.info('Proactive follow-up scheduler stopped');
   }
 }
 
@@ -379,5 +405,6 @@ export {
   SCHEDULE_CRON,
   CALENDLY_CRON,
   IDLE_DETECTION_CRON,
+  PROACTIVE_FOLLOWUP_CRON,
   MAX_FOLLOWUPS_PER_RUN,
 };
