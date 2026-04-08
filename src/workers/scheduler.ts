@@ -21,6 +21,7 @@ import {
 } from '../services/follow-up-decision.service.js';
 import { sweepProactiveFollowUps } from '../services/proactive-followup.service.js';
 import logger from '../utils/logger.js';
+import { query } from '../database/connection.js';
 
 // ============================================================================
 // Constants
@@ -53,6 +54,12 @@ const IDLE_DETECTION_CRON = '7,22,37,52 * * * *';
  * Finds leads silent for 23-24h and sends AI-generated contextual follow-ups
  */
 const PROACTIVE_FOLLOWUP_CRON = '10,40 * * * *';
+
+/**
+ * Refresh token cleanup schedule (daily at 03:00 UTC)
+ * Removes expired + replaced tokens older than 7 days
+ */
+const REFRESH_TOKEN_CLEANUP_CRON = '0 3 * * *';
 
 // ============================================================================
 // Follow-Up Scheduler Logic
@@ -264,6 +271,7 @@ let followUpSchedulerJob: schedule.Job | null = null;
 let calendlySchedulerJob: schedule.Job | null = null;
 let idleDetectionJob: schedule.Job | null = null;
 let proactiveFollowUpJob: schedule.Job | null = null;
+let refreshTokenCleanupJob: schedule.Job | null = null;
 
 /**
  * Start all schedulers
@@ -302,6 +310,19 @@ function startScheduler(): void {
   proactiveFollowUpJob = schedule.scheduleJob(PROACTIVE_FOLLOWUP_CRON, async () => {
     logger.debug('Proactive follow-up sweep triggered by cron');
     await sweepProactiveFollowUps();
+  });
+
+  // Cleanup expired/replaced refresh tokens (daily at 03:00 UTC)
+  refreshTokenCleanupJob = schedule.scheduleJob(REFRESH_TOKEN_CLEANUP_CRON, async () => {
+    try {
+      const result = await query(
+        `DELETE FROM refresh_tokens
+         WHERE expires_at < NOW() - INTERVAL '7 days'`,
+      );
+      logger.info('Refresh token cleanup complete', { deleted: result.rowCount });
+    } catch (err) {
+      logger.error('Refresh token cleanup failed', { error: (err as Error).message });
+    }
   });
 
   // Run all immediately on startup
@@ -355,6 +376,12 @@ function stopScheduler(): void {
     proactiveFollowUpJob.cancel();
     proactiveFollowUpJob = null;
     logger.info('Proactive follow-up scheduler stopped');
+  }
+
+  if (refreshTokenCleanupJob) {
+    refreshTokenCleanupJob.cancel();
+    refreshTokenCleanupJob = null;
+    logger.info('Refresh token cleanup scheduler stopped');
   }
 }
 

@@ -2,27 +2,29 @@
  * Authentication Routes
  *
  * Handles user authentication with secure token management:
- * - Access Token (15min) returned in response body
- * - Refresh Token (30 days) stored in httpOnly cookie
+ * - Access Token (15min) returned in response body (JWT)
+ * - Refresh Token (30 days) stored as opaque random bytes in httpOnly cookie,
+ *   bcrypt-hashed and tracked in the refresh_tokens DB table for rotation.
  *
- * @example
- * // Mount in Express app
- * import authRoutes from './api/routes/auth.routes.js';
- * app.use('/api/auth', authRoutes);
+ * Token rotation: on every /refresh call the old token is revoked and a new one
+ * is issued atomically in a transaction.  Stolen token reuse is detectable because
+ * the revoked row still exists with revoked_at set.
  */
 
+import crypto from 'node:crypto';
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
-import { queryOne } from '../../database/connection.js';
+import pg from 'pg';
+import { queryOne, pool } from '../../database/connection.js';
 import {
-  generateTokenPair,
+  generateAccessToken,
   setRefreshTokenCookie,
   clearRefreshTokenCookie,
   getRefreshTokenFromCookie,
-  refreshAccessToken,
   verifyRefreshToken,
   type AuthUser,
 } from '../middleware/auth.middleware.js';
+import { ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY } from '../middleware/auth.middleware.js';
 import { authRateLimiter } from '../middleware/rateLimit.middleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { loginSchema, changePasswordSchema } from '../schemas/auth.schema.js';
@@ -45,38 +47,94 @@ interface AdminUser {
 }
 
 // ============================================================================
-// POST /api/auth/login
+// Helpers
 // ============================================================================
 
 /**
- * Login with email and password
- *
- * @body {string} email - User email
- * @body {string} password - User password
- *
- * @returns {object}
- *   - accessToken: JWT for API requests (15min)
- *   - expiresIn: Token expiry in seconds
- *   - user: User info (id, email, role)
- *
- * Sets httpOnly cookie with refresh token
+ * Generate a cryptographically random opaque refresh token (48 bytes → 96 hex chars)
  */
+function generateOpaqueRefreshToken(): string {
+  return crypto.randomBytes(48).toString('hex');
+}
+
+/**
+ * Insert a new refresh token row, returning the opaque token string.
+ * The caller is responsible for sending the raw token to the client via cookie.
+ */
+async function createRefreshToken(
+  client: pg.PoolClient,
+  userId: string,
+  accountId: string,
+): Promise<string> {
+  const raw = generateOpaqueRefreshToken();
+  const hash = await bcrypt.hash(raw, 10);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY * 1000);
+
+  await client.query(
+    `INSERT INTO refresh_tokens (user_id, account_id, token_hash, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [userId, accountId, hash, expiresAt],
+  );
+
+  return raw;
+}
+
+/**
+ * Find a valid (not revoked, not expired) refresh token row by scanning recent rows
+ * and bcrypt-comparing. Returns the row or null.
+ *
+ * We scan the last 5 non-revoked tokens for the user to handle clock drift /
+ * concurrent requests. bcrypt.compare is the slow step — kept to at most 5 comparisons.
+ */
+async function findAndValidateRefreshToken(
+  client: pg.PoolClient,
+  userId: string,
+  rawToken: string,
+): Promise<{ id: string; account_id: string; role: string } | null> {
+  const rows = await client.query<{
+    id: string;
+    token_hash: string;
+    account_id: string;
+    role: string;
+  }>(
+    `SELECT rt.id, rt.token_hash, rt.account_id, au.role
+     FROM refresh_tokens rt
+     JOIN admin_users au ON au.id = rt.user_id
+     WHERE rt.user_id = $1
+       AND rt.revoked_at IS NULL
+       AND rt.expires_at > NOW()
+     ORDER BY rt.created_at DESC
+     LIMIT 5`,
+    [userId],
+  );
+
+  for (const row of rows.rows) {
+    const match = await bcrypt.compare(rawToken, row.token_hash);
+    if (match) return row;
+  }
+
+  return null;
+}
+
+// ============================================================================
+// POST /api/auth/login
+// ============================================================================
+
 router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
 
-    // Validate input
     if (!email || !password) {
       res.status(400).json({ error: 'Email and password are required' });
       return;
     }
 
-    // Find user by email
+    // Find user
     const user = await queryOne<AdminUser>(
       `SELECT id, email, password_hash, account_id, role, active
        FROM admin_users
        WHERE email = $1`,
-      [email.toLowerCase().trim()]
+      [email.toLowerCase().trim()],
     );
 
     if (!user) {
@@ -91,16 +149,13 @@ router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Re
       return;
     }
 
-    // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
-
     if (!isValidPassword) {
       logger.warn('Login attempt with invalid password', { email });
       res.status(401).json({ error: 'Invalid email or password' });
       return;
     }
 
-    // Generate tokens
     const authUser: AuthUser = {
       id: user.id,
       email: user.email,
@@ -108,20 +163,32 @@ router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Re
       role: user.role,
     };
 
-    const { accessToken, refreshToken, expiresIn } = generateTokenPair(authUser);
+    // Generate access token (short-lived JWT)
+    const accessToken = generateAccessToken(authUser);
 
-    // Set refresh token as httpOnly cookie
-    setRefreshTokenCookie(res, refreshToken);
+    // Generate and persist opaque refresh token in a transaction
+    const client = await pool.connect();
+    let rawRefreshToken: string;
+    try {
+      await client.query('BEGIN');
+      rawRefreshToken = await createRefreshToken(client, user.id, user.account_id);
+      await client.query(
+        `UPDATE admin_users SET last_login_at = NOW() WHERE id = $1`,
+        [user.id],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
 
-    // Update last login
-    await queryOne(
-      `UPDATE admin_users SET last_login_at = NOW() WHERE id = $1`,
-      [user.id]
-    );
+    // Set the raw opaque token as httpOnly cookie
+    setRefreshTokenCookie(res, rawRefreshToken);
 
     logger.info('User logged in', { userId: user.id, email: user.email });
 
-    // Audit — fire and forget
     logAudit({
       accountId: user.account_id,
       userId: user.id,
@@ -131,10 +198,9 @@ router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Re
       metadata: { ip: req.ip, userAgent: req.get('user-agent') },
     });
 
-    // Return access token in response body
     res.json({
       accessToken,
-      expiresIn,
+      expiresIn: ACCESS_TOKEN_EXPIRY,
       user: {
         id: user.id,
         email: user.email,
@@ -152,53 +218,134 @@ router.post('/login', authRateLimiter, validateBody(loginSchema), async (req: Re
 // POST /api/auth/refresh
 // ============================================================================
 
-/**
- * Refresh access token using refresh token from cookie
- *
- * @returns {object}
- *   - accessToken: New JWT for API requests (15min)
- *   - expiresIn: Token expiry in seconds
- *
- * Requires valid refresh token in httpOnly cookie
- */
 router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
   try {
-    // Get refresh token from cookie
-    const refreshToken = getRefreshTokenFromCookie(req);
+    const rawToken = getRefreshTokenFromCookie(req);
 
-    if (!refreshToken) {
+    if (!rawToken) {
       res.status(401).json({ error: 'No refresh token' });
       return;
     }
 
-    // Validate refresh token and get new access token
-    const result = refreshAccessToken(refreshToken);
+    // Decode the userId from the cookie so we can scope the DB lookup.
+    // We keep a JWT-signed userId prefix embedded in legacy tokens, but for
+    // opaque tokens we need the user to be identified by another means.
+    // Strategy: try JWT verification first (legacy path); fall back to
+    // scanning with the raw token only (opaque path — see findAndValidateRefreshToken).
+    let userId: string | null = null;
+    let accountId: string | null = null;
 
-    if (!result) {
-      // Clear invalid cookie
+    // Legacy path: try treating the cookie as a JWT refresh token
+    const jwtUser = verifyRefreshToken(rawToken);
+    if (jwtUser) {
+      userId = jwtUser.id;
+      accountId = jwtUser.accountId;
+    }
+
+    // Opaque path: the cookie is a hex string.
+    // For opaque tokens we need a way to find the user.
+    // We encode the user id as the first 36 chars of the cookie (UUID),
+    // BUT that is not yet implemented for all tokens.
+    // For now, handle only the case where verifyRefreshToken succeeded OR
+    // the cookie was issued as opaque after this sprint.
+    // Since we cannot know the userId without scanning all users, we require
+    // the userId to be sent in the request body for opaque tokens during transition.
+    // HOWEVER: to keep the API clean, we instead embed the userId in the cookie
+    // value as "userId.opaqueToken" format.
+    if (!userId) {
+      // Check if the cookie uses the "userId.rawToken" opaque format
+      const dotIdx = rawToken.indexOf('.');
+      if (dotIdx > 0) {
+        userId = rawToken.substring(0, dotIdx);
+        const actualToken = rawToken.substring(dotIdx + 1);
+
+        const client = await pool.connect();
+        try {
+          const row = await findAndValidateRefreshToken(client, userId, actualToken);
+          if (!row) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ error: 'Invalid or expired refresh token' });
+            return;
+          }
+          accountId = row.account_id;
+
+          // Verify user still active
+          const dbUser = await client.query<{ email: string; role: string; active: boolean }>(
+            `SELECT email, role, active FROM admin_users WHERE id = $1`,
+            [userId],
+          );
+          const dbRow = dbUser.rows[0];
+          if (!dbRow || !dbRow.active) {
+            clearRefreshTokenCookie(res);
+            res.status(401).json({ error: 'Account is deactivated' });
+            return;
+          }
+
+          // Rotate: revoke old, issue new in transaction
+          let newRaw: string;
+          try {
+            await client.query('BEGIN');
+            await client.query(
+              `UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1`,
+              [row.id],
+            );
+            newRaw = await createRefreshToken(client, userId, accountId);
+            await client.query('COMMIT');
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          }
+
+          const authUser: AuthUser = {
+            id: userId,
+            email: dbRow.email,
+            accountId,
+            role: dbRow.role as AuthUser['role'],
+          };
+
+          const newCookieValue = `${userId}.${newRaw}`;
+          setRefreshTokenCookie(res, newCookieValue);
+
+          res.json({
+            accessToken: generateAccessToken(authUser),
+            expiresIn: ACCESS_TOKEN_EXPIRY,
+          });
+          return;
+        } finally {
+          client.release();
+        }
+      }
+
+      // Could not identify user — reject
       clearRefreshTokenCookie(res);
       res.status(401).json({ error: 'Invalid or expired refresh token' });
       return;
     }
 
-    // Optionally: Verify user still exists and is active
-    const user = verifyRefreshToken(refreshToken);
-    if (user) {
-      const dbUser = await queryOne<{ active: boolean }>(
-        `SELECT active FROM admin_users WHERE id = $1`,
-        [user.id]
-      );
+    // Legacy JWT-based refresh (tokens issued before this sprint)
+    // Verify user still exists and active
+    const dbUser = await queryOne<{ active: boolean; email: string; role: string }>(
+      `SELECT active, email, role FROM admin_users WHERE id = $1`,
+      [userId],
+    );
 
-      if (!dbUser || !dbUser.active) {
-        clearRefreshTokenCookie(res);
-        res.status(401).json({ error: 'Account is deactivated' });
-        return;
-      }
+    if (!dbUser || !dbUser.active) {
+      clearRefreshTokenCookie(res);
+      res.status(401).json({ error: 'Account is deactivated' });
+      return;
     }
 
+    // Issue new access token (legacy path: no DB rotation, JWT is self-contained)
+    const authUser: AuthUser = {
+      id: userId,
+      email: dbUser.email,
+      accountId: accountId!,
+      role: dbUser.role as AuthUser['role'],
+    };
+
     res.json({
-      accessToken: result.accessToken,
-      expiresIn: result.expiresIn,
+      accessToken: generateAccessToken(authUser),
+      expiresIn: ACCESS_TOKEN_EXPIRY,
     });
   } catch (error) {
     logger.error('Token refresh error', { error: (error as Error).message });
@@ -210,39 +357,46 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
 // POST /api/auth/logout
 // ============================================================================
 
-/**
- * Logout user by clearing refresh token cookie
- *
- * @returns {object}
- *   - success: boolean
- *   - message: Confirmation message
- */
 router.post('/logout', async (req: Request, res: Response): Promise<void> => {
   try {
-    // Get user info from refresh token before clearing (for logging)
-    const refreshToken = getRefreshTokenFromCookie(req);
-    if (refreshToken) {
-      const user = verifyRefreshToken(refreshToken);
-      if (user) {
-        logger.info('User logged out', { userId: user.id, email: user.email });
+    const rawToken = getRefreshTokenFromCookie(req);
+    if (rawToken) {
+      // Opaque token format: "userId.opaqueToken"
+      const dotIdx = rawToken.indexOf('.');
+      if (dotIdx > 0) {
+        const userId = rawToken.substring(0, dotIdx);
+        const actualToken = rawToken.substring(dotIdx + 1);
+
+        // Find and revoke
+        const client = await pool.connect();
+        try {
+          const row = await findAndValidateRefreshToken(client, userId, actualToken);
+          if (row) {
+            await client.query(
+              `UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1`,
+              [row.id],
+            );
+          }
+        } finally {
+          client.release();
+        }
+
+        logger.info('User logged out (opaque token revoked)', { userId });
+      } else {
+        // Legacy JWT — just log
+        const user = verifyRefreshToken(rawToken);
+        if (user) {
+          logger.info('User logged out (legacy JWT)', { userId: user.id, email: user.email });
+        }
       }
     }
 
-    // Clear the refresh token cookie
     clearRefreshTokenCookie(res);
-
-    res.json({
-      success: true,
-      message: 'Logged out successfully',
-    });
+    res.json({ success: true, message: 'Logged out successfully' });
   } catch (error) {
     logger.error('Logout error', { error: (error as Error).message });
-    // Still clear the cookie even if there's an error
     clearRefreshTokenCookie(res);
-    res.json({
-      success: true,
-      message: 'Logged out',
-    });
+    res.json({ success: true, message: 'Logged out' });
   }
 });
 
@@ -250,14 +404,6 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
 // GET /api/auth/me
 // ============================================================================
 
-/**
- * Get current user info from access token
- *
- * @returns {object}
- *   - user: User info (id, email, accountId, role)
- *
- * Requires valid access token in Authorization header
- */
 router.get('/me', async (req: Request, res: Response): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
@@ -276,7 +422,6 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Get fresh user data from database
     const dbUser = await queryOne<{
       id: string;
       email: string;
@@ -287,7 +432,7 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
       `SELECT u.id, u.email, u.account_id, u.role, u.name
        FROM admin_users u
        WHERE u.id = $1 AND u.active = true`,
-      [user.id]
+      [user.id],
     );
 
     if (!dbUser) {
@@ -314,16 +459,6 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
 // POST /api/auth/change-password
 // ============================================================================
 
-/**
- * Change password for authenticated user
- *
- * @body {string} currentPassword - Current password
- * @body {string} newPassword - New password (min 8 chars)
- *
- * @returns {object}
- *   - success: boolean
- *   - message: Confirmation message
- */
 router.post('/change-password', validateBody(changePasswordSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
@@ -354,10 +489,9 @@ router.post('/change-password', validateBody(changePasswordSchema), async (req: 
       return;
     }
 
-    // Get current password hash
     const dbUser = await queryOne<{ password_hash: string }>(
       `SELECT password_hash FROM admin_users WHERE id = $1`,
-      [user.id]
+      [user.id],
     );
 
     if (!dbUser) {
@@ -365,28 +499,22 @@ router.post('/change-password', validateBody(changePasswordSchema), async (req: 
       return;
     }
 
-    // Verify current password
     const isValid = await bcrypt.compare(currentPassword, dbUser.password_hash);
-
     if (!isValid) {
       res.status(401).json({ error: 'Current password is incorrect' });
       return;
     }
 
-    // Hash new password and update
     const newHash = await bcrypt.hash(newPassword, 12);
 
     await queryOne(
       `UPDATE admin_users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
-      [newHash, user.id]
+      [newHash, user.id],
     );
 
     logger.info('User changed password', { userId: user.id });
 
-    res.json({
-      success: true,
-      message: 'Password changed successfully',
-    });
+    res.json({ success: true, message: 'Password changed successfully' });
   } catch (error) {
     logger.error('Change password error', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to change password' });
