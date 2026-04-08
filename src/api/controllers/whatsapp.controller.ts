@@ -35,12 +35,12 @@ import {
   getAccountIdByLeadId,
 } from '../../realtime/emitter.js';
 import { logTelemetry } from '../../services/telemetry.service.js';
+import { RedisLock } from '../../utils/redis-lock.js';
 
 // ============================================================================
 // Conversation Mutex — prevent parallel AI calls for the same lead
+// (Redis distributed lock with in-memory fallback)
 // ============================================================================
-
-const processingLeads = new Set<string>();
 
 // ============================================================================
 // Types
@@ -335,12 +335,13 @@ async function processMessage(
     }
 
     // ── Mutex: skip AI call if this lead is already being processed ──
-    if (processingLeads.has(lead.id)) {
+    const lock = new RedisLock(lead.id);
+    const acquired = await lock.acquire();
+
+    if (!acquired) {
       logger.warn('[WA_SKIP] Lead already processing, message saved but skipping AI', { trace, leadId: lead.id });
       return;
     }
-
-    processingLeads.add(lead.id);
 
     try {
       // Get conversation history for Claude
@@ -531,7 +532,7 @@ async function processMessage(
       });
 
     } finally {
-      processingLeads.delete(lead.id);
+      await lock.release();
     }
 
   } catch (error) {
