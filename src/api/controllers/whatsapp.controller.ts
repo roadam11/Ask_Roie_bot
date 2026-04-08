@@ -401,6 +401,16 @@ async function processMessage(
           toolExecutor
         );
       } catch (aiError) {
+        // If the call was aborted by a takeover, do NOT send a fallback — the human is handling it
+        const isAbort =
+          (aiError as { name?: string }).name === 'AbortError' ||
+          (aiError as Error).message?.includes('aborted') ||
+          (aiError as Error).message?.includes('abort');
+        if (isAbort) {
+          logger.info('[WA_ABORT] AI call cancelled by takeover', { trace, leadId: lead.id });
+          return;
+        }
+
         logger.error('[WA_ERR] AI call failed', {
           trace,
           leadId: lead.id,
@@ -424,6 +434,22 @@ async function processMessage(
         } catch { /* best effort */ }
 
         return; // Don't rethrow — we already sent 200 OK
+      }
+
+      // ── Safety net: check ai_active AFTER Claude returns, BEFORE sending ──
+      // Handles the narrow race where takeover happened after the AI finished
+      // computing but the AbortSignal had already been read as "not aborted".
+      const freshConv = await queryOne<{ ai_active: boolean }>(
+        `SELECT COALESCE(ai_active, true) as ai_active FROM conversations
+         WHERE lead_id = $1 ORDER BY started_at DESC LIMIT 1`,
+        [lead.id],
+      );
+      if (freshConv && freshConv.ai_active === false) {
+        logger.info('[WA_ABORT] AI response discarded — human takeover detected after response', {
+          trace,
+          leadId: lead.id,
+        });
+        return;
       }
 
       // Save bot message

@@ -814,6 +814,13 @@ export interface AgentLoopResult {
  */
 const MAX_TOOL_LOOPS = 5;
 
+// ============================================================================
+// In-flight AbortController registry
+// Keyed by leadId. Takeover calls abort() to cancel an in-progress AI call.
+// ============================================================================
+
+export const activeAbortControllers = new Map<string, AbortController>();
+
 /**
  * Send a message with automatic tool execution loop
  *
@@ -835,6 +842,13 @@ export async function sendMessageWithToolLoop(
 ): Promise<AgentLoopResult> {
   const startTime = Date.now();
   const anthropic = getClient();
+
+  // Register AbortController so takeover can cancel this in-flight request
+  const abortController = new AbortController();
+  const { signal } = abortController;
+  activeAbortControllers.set(lead.id, abortController);
+
+  try {
 
   // Load account settings for prompt personalization
   const settings = await safeLoadSettings(lead.id);
@@ -914,7 +928,7 @@ export async function sendMessageWithToolLoop(
       messageCount: messages.length,
     });
 
-    // Make API call
+    // Make API call (signal enables abort on human takeover)
     const response = await anthropic.messages.create({
       model: selectedModel,
       max_tokens: maxTokens,
@@ -922,7 +936,7 @@ export async function sendMessageWithToolLoop(
       system: buildCachedSystemBlocks(systemPrompt),
       messages,
       tools: TOOLS,
-    });
+    }, { signal });
 
     const parsed = parseResponse(response);
     model = parsed.model;
@@ -992,7 +1006,7 @@ export async function sendMessageWithToolLoop(
               system: buildCachedSystemBlocks(systemPrompt),
               messages: sonnetMessages,
               tools: TOOLS,
-            });
+            }, { signal });
 
             const fallbackParsed = parseResponse(fallbackResponse);
             totalInputTokens += fallbackParsed.usage.inputTokens;
@@ -1036,7 +1050,7 @@ export async function sendMessageWithToolLoop(
               system: buildCachedSystemBlocks(systemPrompt),
               messages: retryMessages,
               tools: TOOLS,
-            });
+            }, { signal });
 
             const retryParsed = parseResponse(retryResponse);
             totalInputTokens += retryParsed.usage.inputTokens;
@@ -1227,6 +1241,10 @@ export async function sendMessageWithToolLoop(
       latencyMs, totalCostUsd, model, isFallback,
     ),
   };
+  } finally {
+    // Always clean up the AbortController registration
+    activeAbortControllers.delete(lead.id);
+  }
 }
 
 // ============================================================================

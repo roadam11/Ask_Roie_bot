@@ -14,6 +14,8 @@ import {
   emitOverviewRefresh,
 } from '../../realtime/emitter.js';
 import logger from '../../utils/logger.js';
+import { activeAbortControllers } from '../../services/claude.service.js';
+import { RedisLock } from '../../utils/redis-lock.js';
 
 // Search
 export async function searchConversations(req: AuthenticatedRequest, res: Response) {
@@ -358,10 +360,28 @@ export async function takeoverConversation(req: AuthenticatedRequest, res: Respo
   const accountId = req.user?.accountId;
   const adminId = req.user?.id;
 
+  // Look up lead_id so we can abort the in-flight AI call (if any)
+  const convRow = await queryOne<{ lead_id: string }>(
+    'SELECT lead_id FROM conversations WHERE id = $1',
+    [id],
+  );
+
   await query(
     'UPDATE conversations SET ai_active = false, taken_over_by = $1, taken_over_at = NOW() WHERE id = $2',
     [adminId, id],
   );
+
+  // Abort any in-flight Claude call for this lead (cost-saving + race prevention)
+  if (convRow?.lead_id) {
+    const controller = activeAbortControllers.get(convRow.lead_id);
+    if (controller) {
+      controller.abort();
+      logger.info(`[TAKEOVER] Aborted in-flight AI call for lead`, {
+        conversationId: id,
+        leadId: convRow.lead_id,
+      });
+    }
+  }
 
   // Broadcast
   try {
@@ -504,6 +524,15 @@ export async function adminSendMessage(req: AuthenticatedRequest, res: Response)
 
   if (!conv) {
     return res.status(404).json({ error: 'Conversation not found' });
+  }
+
+  // Safety net: block manual send while AI is actively typing for this lead
+  const aiTyping = await RedisLock.isLocked(conv.lead_id);
+  if (aiTyping) {
+    return res.status(409).json({
+      error: 'AI is currently generating a response. Please wait a moment before sending.',
+      code: 'AI_TYPING',
+    });
   }
 
   const lead = await queryOne<{ phone: string }>(
