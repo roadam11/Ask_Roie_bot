@@ -440,8 +440,8 @@ async function processAutomationFollowUp(
             todo: `Create WhatsApp template: ${templateName}`,
           });
 
-          // Try Telegram fallback if lead has telegram_chat_id stored
-          // TODO: Add telegram_chat_id field to leads table for cross-platform
+          // Try Telegram fallback if lead has telegram_chat_id stored.
+          // Field would be added via a future migration when Telegram support is added.
           const telegramChatId = (lead as unknown as Record<string, unknown>).telegram_chat_id as string | undefined;
 
           if (telegramChatId) {

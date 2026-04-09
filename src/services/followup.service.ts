@@ -1,8 +1,18 @@
 /**
  * Follow-up Service
- * Handles scheduling and sending automated follow-up messages
+ *
+ * Handles scheduling and sending automated follow-up messages.
+ * All DB queries are parameterized and scoped through lead_id
+ * (leads are inherently tenant-scoped via agent_id → account_id).
+ *
+ * Deduplication: Only 1 pending follow-up per lead is allowed.
+ * Anti-spam:     max follow_up_count = 3 per lead (enforced by DB constraint).
+ * 24h Window:    Aborts if NOW() − last_message_at > 24h (WhatsApp rule).
  */
 
+import { query, queryOne } from '../database/connection.js';
+import logger from '../utils/logger.js';
+import { scheduleFollowUp as enqueueFollowUp } from '../workers/queue.js';
 import type { Lead, FollowUp, FollowUpType } from '../types/index.js';
 
 // Follow-up timing constants (in hours)
@@ -30,41 +40,81 @@ interface CanScheduleResult {
   cooldownRemaining?: number;
 }
 
+// ============================================================================
+// Internal DB Helpers
+// ============================================================================
+
 /**
- * Check if a follow-up can be scheduled for a lead
- * Prevents spamming users with multiple follow-ups within 24 hours
+ * Find a lead by ID (real DB query).
+ */
+async function findLeadById(leadId: string): Promise<Lead | null> {
+  return queryOne<Lead>('SELECT * FROM leads WHERE id = $1', [leadId]);
+}
+
+// ============================================================================
+// Validation
+// ============================================================================
+
+/**
+ * Check if a follow-up can be scheduled for a lead.
+ *
+ * Guards:
+ * 1. Lead must exist.
+ * 2. Lead must not be opted out / booked / lost.
+ * 3. Cooldown (23h) must have passed since last follow-up.
+ * 4. Deduplication: no other pending follow-up must exist for this lead.
+ * 5. Anti-spam: lead.follow_up_count must be < 3.
+ * 6. 24h Window: last_message_at must be within the last 24h.
  */
 async function canScheduleFollowUp(leadId: string): Promise<CanScheduleResult> {
-  // TODO: Replace with actual database query
   const lead = await findLeadById(leadId);
 
   if (!lead) {
     return { allowed: false, reason: 'Lead not found' };
   }
 
-  // Don't schedule follow-ups for opted-out leads
   if (lead.opted_out) {
     return { allowed: false, reason: 'Lead has opted out' };
   }
 
-  // Don't schedule follow-ups for booked leads
   if (lead.status === 'booked') {
     return { allowed: false, reason: 'Lead already booked' };
   }
 
-  // Don't schedule follow-ups for lost leads
   if (lead.status === 'lost') {
     return { allowed: false, reason: 'Lead marked as lost' };
   }
 
-  // Check if last follow-up was sent within 24 hours
+  // Anti-spam: max 3 follow-ups per lead lifetime
+  if ((lead.follow_up_count ?? 0) >= 3) {
+    logger.info('[FOLLOWUP_SKIP] Max follow-ups reached', { leadId, count: lead.follow_up_count });
+    return { allowed: false, reason: 'Max follow-ups reached (3)' };
+  }
+
+  // 24h Window: abort if last_user_message_at > 24h ago (WhatsApp rule)
+  if (lead.last_user_message_at) {
+    const hoursSinceLastMessage =
+      (Date.now() - new Date(lead.last_user_message_at).getTime()) / (1000 * 60 * 60);
+    if (hoursSinceLastMessage > 24) {
+      logger.info('[FOLLOWUP_SKIP] Outside 24h messaging window', {
+        leadId,
+        hoursSinceLastMessage: hoursSinceLastMessage.toFixed(1),
+      });
+      return { allowed: false, reason: 'Outside 24h WhatsApp messaging window' };
+    }
+  }
+
+  // Cooldown: 23h since last follow-up
   if (lead.last_followup_sent_at) {
     const hoursSinceLastFollowup =
-      (Date.now() - lead.last_followup_sent_at.getTime()) / (1000 * 60 * 60);
+      (Date.now() - new Date(lead.last_followup_sent_at).getTime()) / (1000 * 60 * 60);
 
     if (hoursSinceLastFollowup < FOLLOWUP_COOLDOWN_HOURS) {
       const cooldownRemaining = FOLLOWUP_COOLDOWN_HOURS - hoursSinceLastFollowup;
-      console.log(`Cooldown active: ${cooldownRemaining.toFixed(1)}h remaining`);
+      logger.debug('[FOLLOWUP_SKIP] Cooldown active', {
+        leadId,
+        cooldownRemaining: cooldownRemaining.toFixed(1),
+      });
       return {
         allowed: false,
         reason: 'Cooldown active',
@@ -73,11 +123,27 @@ async function canScheduleFollowUp(leadId: string): Promise<CanScheduleResult> {
     }
   }
 
+  // Deduplication: reject if a pending follow-up already exists for this lead
+  const existingPending = await queryOne<{ id: string }>(
+    `SELECT id FROM followups WHERE lead_id = $1 AND status = 'pending' LIMIT 1`,
+    [leadId],
+  );
+  if (existingPending) {
+    return { allowed: false, reason: 'Pending follow-up already exists for this lead' };
+  }
+
   return { allowed: true };
 }
 
+// ============================================================================
+// Scheduling
+// ============================================================================
+
 /**
- * Schedule a follow-up message for a lead
+ * Schedule a follow-up message for a lead.
+ *
+ * Persists a row to the `followups` table and enqueues a BullMQ delayed job.
+ * Returns null (and logs reason) if the lead cannot receive a follow-up.
  */
 async function scheduleFollowUp(
   leadId: string,
@@ -87,58 +153,103 @@ async function scheduleFollowUp(
   const canSchedule = await canScheduleFollowUp(leadId);
 
   if (!canSchedule.allowed) {
-    console.log(`Cannot schedule follow-up for lead ${leadId}: ${canSchedule.reason}`);
+    logger.info('[FOLLOWUP_SKIP] Cannot schedule follow-up', {
+      leadId,
+      type,
+      reason: canSchedule.reason,
+    });
     return null;
   }
 
   const intervalHours = FOLLOWUP_INTERVALS[type];
   const scheduledFor = new Date(Date.now() + intervalHours * 60 * 60 * 1000);
+  const delayMs = intervalHours * 60 * 60 * 1000;
 
-  const followUp: Partial<FollowUp> = {
-    lead_id: leadId,
+  // Persist follow-up row
+  const followUp = await queryOne<FollowUp>(
+    `INSERT INTO followups (lead_id, type, scheduled_for, status, template_name)
+     VALUES ($1, $2, $3, 'pending', $4)
+     RETURNING *`,
+    [leadId, type, scheduledFor, templateName ?? null],
+  );
+
+  if (!followUp) {
+    throw new Error(`Failed to insert follow-up record for lead ${leadId}`);
+  }
+
+  // Enqueue BullMQ delayed job — deterministic jobId prevents duplicates
+  await enqueueFollowUp(leadId, type as '24h' | '72h' | '7d', followUp.id, delayMs);
+
+  logger.info('[FOLLOWUP_SCHEDULED] Follow-up scheduled', {
+    followUpId: followUp.id,
+    leadId,
     type,
-    scheduled_for: scheduledFor,
-    status: 'pending',
-    template_name: templateName,
-    created_at: new Date(),
-  };
+    scheduledFor: scheduledFor.toISOString(),
+    delayMs,
+  });
 
-  // TODO: Save to database
-  console.log(`Scheduled ${type} follow-up for lead ${leadId} at ${scheduledFor.toISOString()}`);
-
-  return followUp as FollowUp;
+  return followUp;
 }
 
+// ============================================================================
+// Cancellation
+// ============================================================================
+
 /**
- * Cancel all pending follow-ups for a lead
- * Called when lead books, opts out, or is marked as lost
+ * Cancel all pending follow-ups for a lead.
+ * Called when lead books, opts out, or is marked as lost.
+ *
+ * @returns Count of cancelled rows
  */
 async function cancelPendingFollowUps(leadId: string): Promise<number> {
-  // TODO: Update database
-  console.log(`Cancelling pending follow-ups for lead ${leadId}`);
+  const result = await query(
+    `UPDATE followups
+     SET status = 'cancelled'
+     WHERE lead_id = $1 AND status = 'pending'`,
+    [leadId],
+  );
 
-  // Return count of cancelled follow-ups
-  return 0;
+  const count = result.rowCount ?? 0;
+
+  if (count > 0) {
+    logger.info('[FOLLOWUP_CANCELLED] Pending follow-ups cancelled', { leadId, count });
+  }
+
+  return count;
 }
 
+// ============================================================================
+// Polling
+// ============================================================================
+
 /**
- * Process due follow-ups
- * Called by BullMQ job processor
+ * Query all pending follow-ups whose scheduled_for time has passed.
+ * Used by the scheduler worker to dispatch follow-up jobs.
  */
-async function processDueFollowUps(): Promise<void> {
-  const now = new Date();
+async function processDueFollowUps(): Promise<FollowUp[]> {
+  const result = await query<FollowUp>(
+    `SELECT f.*
+     FROM followups f
+     INNER JOIN leads l ON l.id = f.lead_id
+     WHERE f.status = 'pending'
+       AND f.scheduled_for <= NOW()
+       AND l.opted_out = FALSE
+       AND l.status NOT IN ('booked', 'lost')
+     ORDER BY f.scheduled_for ASC
+     LIMIT 100`,
+  );
 
-  // TODO: Query database for due follow-ups
-  // SELECT * FROM followups
-  // WHERE status = 'pending'
-  // AND scheduled_for <= NOW()
-  // ORDER BY scheduled_for ASC
+  logger.debug('[FOLLOWUP] Due follow-ups found', { count: result.rows.length });
 
-  console.log(`Processing due follow-ups at ${now.toISOString()}`);
+  return result.rows;
 }
 
+// ============================================================================
+// Completion
+// ============================================================================
+
 /**
- * Get follow-up message content based on type and lead state
+ * Get follow-up message content based on type and lead state.
  */
 function getFollowUpMessage(type: FollowUpType, lead: Lead): string {
   switch (type) {
@@ -157,29 +268,47 @@ function getFollowUpMessage(type: FollowUpType, lead: Lead): string {
 }
 
 /**
- * Mark follow-up as sent and update lead
+ * Mark a follow-up as sent and update lead counters.
+ *
+ * Persists:
+ *  - followups.status = 'sent', sent_at = NOW()
+ *  - leads.last_followup_sent_at = NOW()
+ *  - leads.follow_up_count incremented by 1
+ *  - analytics event row
  */
 async function markFollowUpSent(followUpId: string, leadId: string): Promise<void> {
-  const now = new Date();
+  // Update followup status
+  await query(
+    `UPDATE followups
+     SET status = 'sent', sent_at = NOW()
+     WHERE id = $1`,
+    [followUpId],
+  );
 
-  // TODO: Update followup status
-  // UPDATE followups SET status = 'sent', sent_at = NOW() WHERE id = ?
+  // Update lead counters
+  await query(
+    `UPDATE leads
+     SET last_followup_sent_at = NOW(),
+         follow_up_count = COALESCE(follow_up_count, 0) + 1,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [leadId],
+  );
 
-  // TODO: Update lead's last_followup_sent_at
-  // UPDATE leads SET last_followup_sent_at = NOW() WHERE id = ?
+  // Log to analytics (best-effort, non-blocking)
+  query(
+    `INSERT INTO analytics (event_type, lead_id, metadata)
+     VALUES ('followup_sent', $1, $2::jsonb)`,
+    [leadId, JSON.stringify({ followup_id: followUpId })],
+  ).catch((err) => {
+    logger.warn('[FOLLOWUP] Analytics log failed', {
+      followUpId,
+      leadId,
+      error: (err as Error).message,
+    });
+  });
 
-  console.log(`Marked follow-up ${followUpId} as sent for lead ${leadId} at ${now.toISOString()}`);
-}
-
-// ============================================================================
-// Database Helper Stubs (to be implemented with actual DB connection)
-// ============================================================================
-
-async function findLeadById(leadId: string): Promise<Lead | null> {
-  // TODO: Implement with actual database query
-  // SELECT * FROM leads WHERE id = $1
-  console.log(`[STUB] Finding lead by ID: ${leadId}`);
-  return null;
+  logger.info('[FOLLOWUP_SENT] Follow-up marked as sent', { followUpId, leadId });
 }
 
 // ============================================================================
